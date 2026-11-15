@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 92" width="360" height="92" role="img" aria-label="Semi-translucent Japanese kozo cream washi tape">
+  <defs>
+    <!-- Deckle-torn mulberry paper silhouette -->
+    <clipPath id="washiCreamClip">
+      <path d="M 14,12 L 42,10.5 L 88,12 L 136,10 L 185,11.5 L 238,10 L 290,11.5 L 344,10.5 L 347,16 L 342,21 L 349,26 L 343,32 L 351,38 L 345,44 L 353,51 L 344,57 L 350,63 L 343,69 L 348,75 L 343,80 L 296,81 L 245,79.5 L 190,81.5 L 135,79.5 L 78,81 L 28,79.5 L 12,80.5 L 16,74 L 9,68 L 15,61 L 8,55 L 16,49 L 10,43 L 17,37 L 9,31 L 15,24 L 10,18 Z" />
+    </clipPath>
+
+    <linearGradient id="kozoBaseGrad" x1="0%" y1="0%" x2="100%" y2="10%">
+      <stop offset="0%" stop-color="#F6EEDB" stop-opacity="0.86" />
+      <stop offset="35%" stop-color="#FBF6EA" stop-opacity="0.80" />
+      <stop offset="70%" stop-color="#F2E7CF" stop-opacity="0.85" />
+      <stop offset="100%" stop-color="#F8F1E1" stop-opacity="0.82" />
+    </linearGradient>
+
+    <!-- Subtle botanical crosshatch & kozo weave pattern -->
+    <pattern id="kozoCrosshatch" width="18" height="18" patternUnits="userSpaceOnUse">
+      <path d="M 0,9 L 18,9 M 9,0 L 9,18" stroke="#D5C5AA" stroke-width="0.45" opacity="0.32" />
+      <path d="M 0,0 L 18,18 M 18,0 L 0,18" stroke="#CBB99B" stroke-width="0.4" opacity="0.22" />
+      <path d="M 3,5 Q 7,3 11,6" fill="none" stroke="#BBA685" stroke-width="0.55" opacity="0.35" />
+    </pattern>
+  </defs>
+
+  <!-- Soft lifted paper edge shadow -->
+  <path d="M 15,14 L 345,12.5 L 344,82 L 13,82.5 Z" fill="#2A2421" opacity="0.08" />
+
+  <g clip-path="url(#washiCreamClip)">
+    <!-- Translucent kozo cream body -->
+    <rect x="0" y="0" width="360" height="92" fill="url(#kozoBaseGrad)" />
+    <rect x="0" y="0" width="360" height="92" fill="url(#kozoCrosshatch)" />
+
+    <!-- Organic embedded kozo mulberry fibers & faint botanical flecks -->
+    <g fill="none" stroke="#B69F7E" stroke-linecap="round" opacity="0.45">
+      <path d="M 28,26 C 42,24 54,29 66,26" stroke-width="0.8" />
+      <path d="M 88,61 C 102,65 118,59 130,63" stroke-width="0.7" />
+      <path d="M 164,29 C 175,24 186,32 198,28" stroke-width="0.75" />
+      <path d="M 225,57 C 239,53 252,60 264,55" stroke-width="0.8" />
+      <path d="M 294,30 C 308,27 321,33 334,29" stroke-width="0.7" />
+      <path d="M 48,54 C 55,48 64,46 70,51" stroke-width="0.65" />
+      <path d="M 142,46 C 150,41 159,44 166,48" stroke-width="0.65" />
+      <path d="M 268,38 C 276,43 285,40 291,35" stroke-width="0.65" />
+    </g>
+
+    <!-- Subtle pressed botanical leaf silhouette flecks -->
+    <g fill="#5E7A64" opacity="0.16">
+      <path d="M 74,40 C 79,34 86,34 90,39 C 85,43 78,43 74,40 Z" />
+      <path d="M 192,63 C 197,57 204,57 208,62 C 203,66 196,66 192,63 Z" />
+      <path d="M 304,58 C 309,52 316,52 320,57 C 315,61 308,61 304,58 Z" />
+    </g>
+
+    <!-- Torn deckle edge highlight & delicate top/bottom sheen -->
+    <line x1="12" y1="12" x2="346" y2="12" stroke="#FFFFFF" stroke-width="1.2" opacity="0.55" />
+    <line x1="12" y1="80" x2="346" y2="80" stroke="#D2C0A4" stroke-width="0.9" opacity="0.45" />
+  </g>
+
+  <!-- Crisp faint deckle outline on torn left/right edges -->
+  <path d="M 14,12 L 42,10.5 L 88,12 L 136,10 L 185,11.5 L 238,10 L 290,11.5 L 344,10.5 L 347,16 L 342,21 L 349,26 L 343,32 L 351,38 L 345,44 L 353,51 L 344,57 L 350,63 L 343,69 L 348,75 L 343,80 L 296,81 L 245,79.5 L 190,81.5 L 135,79.5 L 78,81 L 28,79.5 L 12,80.5 L 16,74 L 9,68 L 15,61 L 8,55 L 16,49 L 10,43 L 17,37 L 9,31 L 15,24 L 10,18 Z"
+        fill="none" stroke="#CEBDA2" stroke-width="0.7" opacity="0.7" />
+</svg>

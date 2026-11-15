@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 280 200" width="280" height="200" role="img" aria-label="Botanical herbarium specimen oval ink stamp">
+  <defs>
+    <path id="herbariumTopArc" d="M 35,100 A 105,69 0 1,1 245,100" fill="none" />
+    <path id="herbariumBotArc" d="M 33,102 A 107,71 0 0,0 247,102" fill="none" />
+  </defs>
+
+  <g opacity="0.88">
+    <!-- Outer double engraved oval border -->
+    <ellipse cx="140" cy="100" rx="130" ry="90" fill="none" stroke="#5E7A64" stroke-width="2.2" stroke-dasharray="210 2.5 190 2 240 2" />
+    <ellipse cx="140" cy="100" rx="124" ry="84" fill="none" stroke="#5E7A64" stroke-width="0.95" />
+    <ellipse cx="140" cy="100" rx="92" ry="56" fill="none" stroke="#5E7A64" stroke-width="1.15" />
+    <ellipse cx="140" cy="100" rx="87" ry="51.5" fill="none" stroke="#5E7A64" stroke-width="0.7" stroke-dasharray="2.5 2.5" />
+
+    <!-- Side diamond rosettes -->
+    <path d="M 32,100 L 36.5,96 L 41,100 L 36.5,104 Z" fill="#5E7A64" />
+    <path d="M 239,100 L 243.5,96 L 248,100 L 243.5,104 Z" fill="#5E7A64" />
+
+    <!-- Curved herbarium catalog typography -->
+    <g>
+      <text x="50.88" y="61.14" fill="#46604B" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="8.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(-43.79 50.88 61.14)">H</text>
+      <text x="58.36" y="54.78" fill="#46604B" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="8.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(-37.04 58.36 54.78)">E</text>
+      <text x="66.93" y="49.03" fill="#46604B" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="8.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(-30.93 66.93 49.03)">R</text>
+      <text x="76.46" y="43.94" fill="#46604B" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="8.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(-25.35 76.46 43.94)">B</text>
+      <text x="86.82" y="39.60" fill="#46604B" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="8.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(-20.20 86.82 39.60)">A</text>
+      <text x="97.89" y="36.05" fill="#46604B" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="8.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(-15.39 97.89 36.05)">R</text>
+      <text x="109.52" y="33.35" fill="#46604B" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="8.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(-10.82 109.52 33.35)">I</text>
+      <text x="121.55" y="31.53" fill="#46604B" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="8.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(-6.43 121.55 31.53)">U</text>
+      <text x="133.82" y="30.61" fill="#46604B" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="8.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(-2.13 133.82 30.61)">M</text>
+      <text x="158.45" y="31.53" fill="#46604B" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="8.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(6.43 158.45 31.53)">S</text>
+      <text x="170.48" y="33.35" fill="#46604B" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="8.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(10.82 170.48 33.35)">P</text>
+      <text x="182.11" y="36.05" fill="#46604B" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="8.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(15.39 182.11 36.05)">E</text>
+      <text x="193.18" y="39.60" fill="#46604B" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="8.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(20.20 193.18 39.60)">C</text>
+      <text x="203.54" y="43.94" fill="#46604B" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="8.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(25.35 203.54 43.94)">I</text>
+      <text x="213.07" y="49.03" fill="#46604B" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="8.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(30.93 213.07 49.03)">M</text>
+      <text x="221.64" y="54.78" fill="#46604B" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="8.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(37.04 221.64 54.78)">E</text>
+      <text x="229.12" y="61.14" fill="#46604B" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="8.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(43.79 229.12 61.14)">N</text>
+      <text x="46.04" y="135.25" fill="#46604B" stroke="none" font-family="'Courier New', monospace" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(48.38 46.04 135.25)">F</text>
+      <text x="51.62" y="140.89" fill="#46604B" stroke="none" font-family="'Courier New', monospace" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(42.38 51.62 140.89)">L</text>
+      <text x="58.00" y="146.17" fill="#46604B" stroke="none" font-family="'Courier New', monospace" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(36.87 58.00 146.17)">O</text>
+      <text x="65.13" y="151.02" fill="#46604B" stroke="none" font-family="'Courier New', monospace" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(31.78 65.13 151.02)">R</text>
+      <text x="72.93" y="155.42" fill="#46604B" stroke="none" font-family="'Courier New', monospace" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(27.07 72.93 155.42)">A</text>
+      <text x="90.28" y="162.66" fill="#46604B" stroke="none" font-family="'Courier New', monospace" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(18.52 90.28 162.66)">A</text>
+      <text x="99.67" y="165.45" fill="#46604B" stroke="none" font-family="'Courier New', monospace" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(14.58 99.67 165.45)">R</text>
+      <text x="109.43" y="167.64" fill="#46604B" stroke="none" font-family="'Courier New', monospace" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(10.80 109.43 167.64)">C</text>
+      <text x="119.47" y="169.23" fill="#46604B" stroke="none" font-family="'Courier New', monospace" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(7.14 119.47 169.23)">H</text>
+      <text x="129.69" y="170.18" fill="#46604B" stroke="none" font-family="'Courier New', monospace" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(3.55 129.69 170.18)">I</text>
+      <text x="140.00" y="170.50" fill="#46604B" stroke="none" font-family="'Courier New', monospace" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(360.00 140.00 170.50)">V</text>
+      <text x="150.31" y="170.18" fill="#46604B" stroke="none" font-family="'Courier New', monospace" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(356.45 150.31 170.18)">E</text>
+      <text x="170.57" y="167.64" fill="#46604B" stroke="none" font-family="'Courier New', monospace" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(349.20 170.57 167.64)">•</text>
+      <text x="189.72" y="162.66" fill="#46604B" stroke="none" font-family="'Courier New', monospace" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(341.48 189.72 162.66)">P</text>
+      <text x="198.66" y="159.31" fill="#46604B" stroke="none" font-family="'Courier New', monospace" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(337.34 198.66 159.31)">R</text>
+      <text x="207.07" y="155.42" fill="#46604B" stroke="none" font-family="'Courier New', monospace" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(332.93 207.07 155.42)">E</text>
+      <text x="214.87" y="151.02" fill="#46604B" stroke="none" font-family="'Courier New', monospace" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(328.22 214.87 151.02)">S</text>
+      <text x="222.00" y="146.17" fill="#46604B" stroke="none" font-family="'Courier New', monospace" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(323.13 222.00 146.17)">S</text>
+      <text x="228.38" y="140.89" fill="#46604B" stroke="none" font-family="'Courier New', monospace" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(317.62 228.38 140.89)">E</text>
+      <text x="233.96" y="135.25" fill="#46604B" stroke="none" font-family="'Courier New', monospace" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(311.62 233.96 135.25)">D</text>
+    </g>
+
+    <!-- Intricate botanical fern frond inside the specimen oval -->
+    <g fill="none" stroke="#46604B" stroke-linecap="round" stroke-linejoin="round">
+      <!-- Graceful arching rachis stem -->
+      <path d="M 80,126 C 102,115 128,101 154,88 C 174,78 192,70 206,65" stroke-width="1.7" />
+      <!-- Secondary tiny fiddlehead curl at base -->
+      <path d="M 88,122 C 83,113 78,106 83,100 C 87,96 92,98 90,103 C 88,106 84,104 86,101" stroke-width="1.05" />
+
+      <!-- Pinnae leaflets along upper & lower sides with fine central midribs -->
+      <!-- Pair 1 -->
+      <path d="M 96,118 C 91,107 87,97 92,89 C 98,95 101,106 98,117 Z" fill="#5E7A64" fill-opacity="0.22" stroke-width="1.0" />
+      <path d="M 96,117 Q 94,104 92,92" stroke-width="0.6" />
+      <path d="M 101,115 C 108,123 116,129 124,132 C 118,123 111,117 103,114 Z" fill="#5E7A64" fill-opacity="0.22" stroke-width="1.0" />
+      <path d="M 102,115 Q 112,123 121,130" stroke-width="0.6" />
+
+      <!-- Pair 2 -->
+      <path d="M 110,111 C 105,98 103,86 108,77 C 114,85 116,97 112,110 Z" fill="#5E7A64" fill-opacity="0.25" stroke-width="1.0" />
+      <path d="M 110,110 Q 109,94 108,80" stroke-width="0.6" />
+      <path d="M 115,108 C 123,117 133,124 143,127 C 136,117 127,110 117,107 Z" fill="#5E7A64" fill-opacity="0.25" stroke-width="1.0" />
+      <path d="M 116,108 Q 128,117 140,125" stroke-width="0.6" />
+
+      <!-- Pair 3 -->
+      <path d="M 124,103 C 120,90 119,78 124,69 C 130,78 131,90 126,102 Z" fill="#5E7A64" fill-opacity="0.28" stroke-width="1.0" />
+      <path d="M 125,102 Q 124,86 124,72" stroke-width="0.6" />
+      <path d="M 129,100 C 138,109 148,116 158,118 C 151,108 141,102 131,99 Z" fill="#5E7A64" fill-opacity="0.28" stroke-width="1.0" />
+      <path d="M 130,100 Q 143,109 155,116" stroke-width="0.6" />
+
+      <!-- Pair 4 -->
+      <path d="M 139,95 C 136,83 136,72 141,64 C 146,72 146,84 141,94 Z" fill="#5E7A64" fill-opacity="0.25" stroke-width="1.0" />
+      <path d="M 140,94 Q 140,79 141,67" stroke-width="0.55" />
+      <path d="M 144,93 C 153,101 163,106 172,107 C 165,98 155,93 146,92 Z" fill="#5E7A64" fill-opacity="0.25" stroke-width="1.0" />
+      <path d="M 145,93 Q 157,100 169,105" stroke-width="0.55" />
+
+      <!-- Pair 5 -->
+      <path d="M 154,88 C 152,77 153,68 158,61 C 162,69 161,79 156,87 Z" fill="#5E7A64" fill-opacity="0.22" stroke-width="0.95" />
+      <path d="M 158,86 C 167,93 176,97 184,97 C 178,89 169,85 160,85 Z" fill="#5E7A64" fill-opacity="0.22" stroke-width="0.95" />
+
+      <!-- Pair 6 -->
+      <path d="M 169,81 C 168,72 170,65 174,59 C 177,66 176,74 171,80 Z" fill="#5E7A64" fill-opacity="0.2" stroke-width="0.9" />
+      <path d="M 173,79 C 181,84 189,87 195,86 C 190,80 182,77 175,78 Z" fill="#5E7A64" fill-opacity="0.2" stroke-width="0.9" />
+
+      <!-- Pair 7 & Terminal Apex -->
+      <path d="M 183,74 C 184,67 186,62 190,58 C 191,64 189,70 185,74 Z" fill="#5E7A64" fill-opacity="0.18" stroke-width="0.85" />
+      <path d="M 187,73 C 193,76 199,78 204,76 C 200,72 194,70 188,72 Z" fill="#5E7A64" fill-opacity="0.18" stroke-width="0.85" />
+      <path d="M 196,68 C 200,64 205,61 210,60 C 207,65 202,68 197,69 Z" fill="#5E7A64" fill-opacity="0.22" stroke-width="0.85" />
+
+      <!-- Fine botanical spore / catalog dots -->
+      <circle cx="195" cy="116" r="1.1" fill="#5E7A64" stroke="none" />
+      <circle cx="201" cy="112" r="0.9" fill="#5E7A64" stroke="none" />
+      <circle cx="72" cy="88" r="1.0" fill="#5E7A64" stroke="none" />
+    </g>
+
+    <!-- Specimen catalog plate number -->
+    <text x="160" y="136" fill="#46604B" font-family="'Courier New', monospace" font-size="6.8" font-weight="bold" text-anchor="middle" letter-spacing="1.1">SPEC. NO. 042</text>
+  </g>
+</svg>

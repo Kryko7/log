@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 380 180" width="380" height="180" role="img" aria-label="Sanctuary Post circular postal cancellation mark">
+  <defs>
+    <!-- Top and bottom circular text paths centered at (96, 90) -->
+    <path id="postmarkTopArc" d="M 38,90 A 58,58 0 1,1 154,90" fill="none" />
+    <path id="postmarkBotArc" d="M 36,92 A 60,60 0 0,0 156,92" fill="none" />
+  </defs>
+
+  <g fill="none" stroke="#B5563E" opacity="0.88">
+    <!-- Outer double-ring cancellation seal -->
+    <circle cx="96" cy="90" r="76" stroke-width="2.4" stroke-dasharray="140 2 90 1.5 180 2" />
+    <circle cx="96" cy="90" r="70.5" stroke-width="1.0" />
+
+    <!-- Fine engraved radial inner ticks (48 ticks around r=64..69) -->
+    <g stroke-width="0.85" opacity="0.85">
+      <path d="M96,21 v5 M96,154 v5 M27,90 h5 M160,90 h5" stroke-width="1.3" />
+      <g transform="translate(96,90)">
+        <path d="M0,-69 v-3 M0,69 v3 M-69,0 h-3 M69,0 h3" opacity="0" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(7.5)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(15)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(22.5)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-63.5" stroke-width="1.2" transform="rotate(30)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(37.5)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(45)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(52.5)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-63.5" stroke-width="1.2" transform="rotate(60)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(67.5)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(75)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(82.5)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(97.5)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(105)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(112.5)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-63.5" stroke-width="1.2" transform="rotate(120)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(127.5)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(135)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(142.5)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-63.5" stroke-width="1.2" transform="rotate(150)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(157.5)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(165)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(172.5)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(187.5)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(195)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(202.5)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-63.5" stroke-width="1.2" transform="rotate(210)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(217.5)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(225)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(232.5)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-63.5" stroke-width="1.2" transform="rotate(240)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(247.5)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(255)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(262.5)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(277.5)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(285)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(292.5)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-63.5" stroke-width="1.2" transform="rotate(300)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(307.5)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(315)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(322.5)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-63.5" stroke-width="1.2" transform="rotate(330)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(337.5)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(345)" />
+        <line x1="0" y1="-69.5" x2="0" y2="-65" transform="rotate(352.5)" />
+      </g>
+    </g>
+
+    <!-- Inner circular frame & date bridge -->
+    <circle cx="96" cy="90" r="46" stroke-width="1.2" />
+    <circle cx="96" cy="90" r="42" stroke-width="0.7" stroke-dasharray="2.5 2.5" />
+
+    <!-- Horizontal date rules & botanical postmark sprout -->
+    <line x1="56" y1="78" x2="136" y2="78" stroke-width="0.95" />
+    <line x1="56" y1="102" x2="136" y2="102" stroke-width="0.95" />
+    <path d="M96,74 C96,67 91,63 87,64 C90,68 94,71 96,74 Z" fill="#B5563E" stroke-width="0.7" />
+    <path d="M96,74 C96,67 101,63 105,64 C102,68 98,71 96,74 Z" fill="#B5563E" stroke-width="0.7" />
+    <path d="M96,113 L98.5,116.5 L96,120 L93.5,116.5 Z" fill="#B5563E" stroke="none" />
+
+    <!-- Curved arc typography -->
+    <g>
+      <text x="41.18" y="76.33" fill="#B5563E" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(-76.00 41.18 76.33)">S</text>
+      <text x="43.12" y="70.11" fill="#B5563E" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(-69.39 43.12 70.11)">A</text>
+      <text x="45.76" y="64.16" fill="#B5563E" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(-62.78 45.76 64.16)">N</text>
+      <text x="49.06" y="58.55" fill="#B5563E" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(-56.17 49.06 58.55)">C</text>
+      <text x="53.00" y="53.36" fill="#B5563E" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(-49.57 53.00 53.36)">T</text>
+      <text x="57.50" y="48.65" fill="#B5563E" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(-42.96 57.50 48.65)">U</text>
+      <text x="62.51" y="44.49" fill="#B5563E" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(-36.35 62.51 44.49)">A</text>
+      <text x="67.97" y="40.94" fill="#B5563E" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(-29.74 67.97 40.94)">R</text>
+      <text x="73.81" y="38.04" fill="#B5563E" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(-23.13 73.81 38.04)">Y</text>
+      <text x="86.27" y="34.34" fill="#B5563E" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(-9.91 86.27 34.34)">P</text>
+      <text x="92.74" y="33.59" fill="#B5563E" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(-3.30 92.74 33.59)">O</text>
+      <text x="99.26" y="33.59" fill="#B5563E" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(3.30 99.26 33.59)">S</text>
+      <text x="105.73" y="34.34" fill="#B5563E" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(9.91 105.73 34.34)">T</text>
+      <text x="118.19" y="38.04" fill="#B5563E" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(23.13 118.19 38.04)">•</text>
+      <text x="129.49" y="44.49" fill="#B5563E" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(36.35 129.49 44.49)">A</text>
+      <text x="134.50" y="48.65" fill="#B5563E" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(42.96 134.50 48.65)">R</text>
+      <text x="139.00" y="53.36" fill="#B5563E" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(49.57 139.00 53.36)">C</text>
+      <text x="142.94" y="58.55" fill="#B5563E" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(56.17 142.94 58.55)">H</text>
+      <text x="146.24" y="64.16" fill="#B5563E" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(62.78 146.24 64.16)">I</text>
+      <text x="148.88" y="70.11" fill="#B5563E" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(69.39 148.88 70.11)">V</text>
+      <text x="150.82" y="76.33" fill="#B5563E" stroke="none" font-family="Georgia, 'Times New Roman', serif" font-size="7.6" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(76.00 150.82 76.33)">E</text>
+      <text x="47.07" y="118.25" fill="#B5563E" stroke="none" font-family="'Courier New', monospace" font-size="7.1" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(420.00 47.07 118.25)">F</text>
+      <text x="50.68" y="123.74" fill="#B5563E" stroke="none" font-family="'Courier New', monospace" font-size="7.1" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(413.33 50.68 123.74)">O</text>
+      <text x="54.90" y="128.77" fill="#B5563E" stroke="none" font-family="'Courier New', monospace" font-size="7.1" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(406.67 54.90 128.77)">L</text>
+      <text x="59.68" y="133.28" fill="#B5563E" stroke="none" font-family="'Courier New', monospace" font-size="7.1" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(400.00 59.68 133.28)">I</text>
+      <text x="64.95" y="137.21" fill="#B5563E" stroke="none" font-family="'Courier New', monospace" font-size="7.1" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(393.33 64.95 137.21)">O</text>
+      <text x="76.68" y="143.09" fill="#B5563E" stroke="none" font-family="'Courier New', monospace" font-size="7.1" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(380.00 76.68 143.09)">•</text>
+      <text x="89.44" y="146.12" fill="#B5563E" stroke="none" font-family="'Courier New', monospace" font-size="7.1" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(366.67 89.44 146.12)">L</text>
+      <text x="96.00" y="146.50" fill="#B5563E" stroke="none" font-family="'Courier New', monospace" font-size="7.1" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(360.00 96.00 146.50)">O</text>
+      <text x="102.56" y="146.12" fill="#B5563E" stroke="none" font-family="'Courier New', monospace" font-size="7.1" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(353.33 102.56 146.12)">C</text>
+      <text x="109.03" y="144.98" fill="#B5563E" stroke="none" font-family="'Courier New', monospace" font-size="7.1" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(346.67 109.03 144.98)">A</text>
+      <text x="115.32" y="143.09" fill="#B5563E" stroke="none" font-family="'Courier New', monospace" font-size="7.1" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(340.00 115.32 143.09)">L</text>
+      <text x="127.05" y="137.21" fill="#B5563E" stroke="none" font-family="'Courier New', monospace" font-size="7.1" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(326.67 127.05 137.21)">V</text>
+      <text x="132.32" y="133.28" fill="#B5563E" stroke="none" font-family="'Courier New', monospace" font-size="7.1" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(320.00 132.32 133.28)">A</text>
+      <text x="137.10" y="128.77" fill="#B5563E" stroke="none" font-family="'Courier New', monospace" font-size="7.1" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(313.33 137.10 128.77)">U</text>
+      <text x="141.32" y="123.74" fill="#B5563E" stroke="none" font-family="'Courier New', monospace" font-size="7.1" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(306.67 141.32 123.74)">L</text>
+      <text x="144.93" y="118.25" fill="#B5563E" stroke="none" font-family="'Courier New', monospace" font-size="7.1" font-weight="bold" text-anchor="middle" dominant-baseline="central" transform="rotate(300.00 144.93 118.25)">T</text>
+    </g>
+
+    <!-- Center date & serial stamp -->
+    <text x="96" y="93.5" fill="#B5563E" stroke="none" font-family="'Courier New', monospace" font-size="10.2" font-weight="bold" text-anchor="middle" letter-spacing="1.5">NOV 15 2026</text>
+
+    <!-- 5 wavy cancellation lines extending right -->
+    <g stroke="#B5563E" stroke-width="2.0" stroke-linecap="round">
+      <path d="M 164,56 C 186,47 204,65 226,56 C 248,47 266,65 288,56 C 310,47 328,65 350,56 C 358,53 364,54 370,56" stroke-dasharray="145 3 48 2 30" />
+      <path d="M 171,73 C 193,64 211,82 233,73 C 255,64 273,82 295,73 C 317,64 335,82 357,73 C 364,70 368,71 372,73" stroke-dasharray="90 2.5 110 2 25" />
+      <path d="M 174,90 C 196,81 214,99 236,90 C 258,81 276,99 298,90 C 320,81 338,99 360,90 C 366,87.5 370,88.5 374,90" />
+      <path d="M 171,107 C 193,98 211,116 233,107 C 255,98 273,116 295,107 C 317,98 335,116 357,107 C 364,104 368,105 372,107" stroke-dasharray="120 2.5 75 2 30" />
+      <path d="M 164,124 C 186,115 204,133 226,124 C 248,115 266,133 288,124 C 310,115 328,133 350,124 C 358,121 364,122 370,124" stroke-dasharray="60 2 135 2.5 28" />
+    </g>
+  </g>
+</svg>

@@ -3,7 +3,7 @@ name = "journal-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Local Axum HTTP API and static asset server for Log"
+description = "Local Axum HTTP API, CLI, demo seeder, and static asset server for Log"
 
 [[bin]]
 name = "log-journal"
@@ -24,3 +24,9 @@ axum.workspace = true
 tower-http.workspace = true
 clap.workspace = true
 reqwest.workspace = true
+dirs.workspace = true
+image.workspace = true
+hound.workspace = true
+
+[dev-dependencies]
+zip.workspace = true

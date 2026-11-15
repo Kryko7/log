@@ -1952,11 +1952,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "hex",
  "journal-core",
  "journal-types",
  "regex",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.21",
  "uuid",
  "walkdir",
@@ -1971,6 +1973,9 @@ dependencies = [
  "axum",
  "chrono",
  "clap",
+ "dirs",
+ "hound",
+ "image",
  "journal-core",
  "journal-import",
  "journal-sync",
@@ -1981,6 +1986,7 @@ dependencies = [
  "tokio",
  "tower-http",
  "uuid",
+ "zip",
 ]
 
 [[package]]
@@ -1996,6 +2002,7 @@ dependencies = [
  "hex",
  "journal-core",
  "journal-types",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2 0.10.9",
