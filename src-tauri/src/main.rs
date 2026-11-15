@@ -4,7 +4,7 @@
 //!
 //! Supports headless CLI administration (`seed-demo`, `import-dayone`, `import-notion`,
 //! `backup`, `restore`) alongside the native GTK/Wayland Tauri v2 desktop window with
-//! `vault://` media streaming and all 26 `#[tauri::command]` IPC handlers.
+//! `vault://` media streaming and all 28 `#[tauri::command]` IPC handlers.
 
 mod audio_rec;
 mod desktop;
@@ -29,11 +29,11 @@ use journal_sync::{
 };
 use journal_types::{
     AssetManifest, BacklinkRef, BackupConfig, BackupInfo, CalendarDaySummary,
-    CreateNotebookRequest, DailyContext, DeleteEntryResponse, Entry, EntrySummary, GeoLocation,
-    ImportDayOneRequest, ImportNotionRequest, MigrationReport, Notebook, OnThisDayGroup,
-    PolaroidMeta, RestoreBackupRequest, RestoreBackupResponse, SaveEntryRequest, SearchHit,
-    SearchQuery, StampPlacement, SyncResult, TagCount, Template, VaultStats, VoiceMemoMeta,
-    WeatherInfo,
+    CreateNotebookRequest, DailyContext, DeleteEntryResponse, DeleteNotebookResponse, Entry,
+    EntrySummary, GeoLocation, ImportDayOneRequest, ImportNotionRequest, MigrationReport, Notebook,
+    OnThisDayGroup, PolaroidMeta, RestoreBackupRequest, RestoreBackupResponse, SaveEntryRequest,
+    SearchHit, SearchQuery, StampPlacement, SyncResult, TagCount, Template, UpdateNotebookRequest,
+    VaultStats, VoiceMemoMeta, WeatherInfo,
 };
 use tauri::{Manager, State};
 use uuid::Uuid;
@@ -564,6 +564,43 @@ async fn create_notebook(
                 cover_asset,
                 accent_color,
             })
+            .map_err(err_str)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn update_notebook(
+    state: State<'_, DesktopState>,
+    id: String,
+    name: String,
+    description: Option<String>,
+    cover_asset: Option<String>,
+    accent_color: Option<String>,
+) -> Result<Notebook, String> {
+    spawn_vault(&state.vault, move |vault| {
+        vault
+            .update_notebook(UpdateNotebookRequest {
+                id,
+                name,
+                description,
+                cover_asset,
+                accent_color,
+            })
+            .map_err(err_str)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn delete_notebook(
+    state: State<'_, DesktopState>,
+    id: String,
+    delete_entries: Option<bool>,
+) -> Result<DeleteNotebookResponse, String> {
+    spawn_vault(&state.vault, move |vault| {
+        vault
+            .delete_notebook(&id, delete_entries.unwrap_or(false))
             .map_err(err_str)
     })
     .await
@@ -1125,6 +1162,8 @@ fn main() {
                     get_vault_stats,
                     list_notebooks,
                     create_notebook,
+                    update_notebook,
+                    delete_notebook,
                     list_entries,
                     get_entry,
                     save_entry,

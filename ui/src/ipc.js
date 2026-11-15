@@ -124,6 +124,27 @@ export const api = {
       accent_color: req.accent_color ?? null,
     }),
 
+  updateNotebook: (req = {}) =>
+    invokeCmd("update_notebook", {
+      id: requireId(req.id, "notebook id"),
+      name: req.name ?? "",
+      description: req.description ?? null,
+      cover_asset: req.cover_asset ?? null,
+      accent_color: req.accent_color ?? null,
+    }),
+
+  deleteNotebook: (idOrObj, deleteEntries = false) => {
+    const isObj = typeof idOrObj === "object" && idOrObj !== null;
+    const id = requireId(idOrObj, "notebook id");
+    const del = isObj
+      ? Boolean(idOrObj.delete_entries ?? idOrObj.deleteEntries)
+      : Boolean(deleteEntries);
+    return invokeCmd("delete_notebook", {
+      id,
+      delete_entries: del,
+    });
+  },
+
   listEntries: (params = {}) =>
     invokeCmd("list_entries", {
       notebook_id: params.notebook_id ?? null,
@@ -256,19 +277,28 @@ export const api = {
     }),
 
   syncGdrive: (passOrObj, config) => {
-    if (
+    const wrapped =
       typeof passOrObj === "object" &&
       passOrObj !== null &&
-      ("config" in passOrObj || "passphrase" in passOrObj)
-    ) {
-      return invokeCmd("sync_gdrive", {
-        passphrase: passOrObj.passphrase ?? null,
-        config: passOrObj.config,
-      });
-    }
+      ("config" in passOrObj || "passphrase" in passOrObj);
+    const rawPass = wrapped ? passOrObj.passphrase : passOrObj;
+    const rawCfg = wrapped ? passOrObj.config : config;
+    const keepRaw = rawCfg?.keep_last_n ?? rawCfg?.keep_local_snapshots ?? 14;
+    const keepLastN = Number.isFinite(Number(keepRaw))
+      ? Math.max(0, Math.floor(Number(keepRaw)))
+      : 14;
+    const normalizedConfig = rawCfg
+      ? {
+          destination_dir: rawCfg.destination_dir ?? null,
+          gdrive_folder: rawCfg.gdrive_folder || "LogJournal",
+          auto_sync_enabled: Boolean(rawCfg.auto_sync_enabled),
+          keep_last_n: keepLastN,
+          has_passphrase_hint: rawCfg.has_passphrase_hint ?? null,
+        }
+      : null;
     return invokeCmd("sync_gdrive", {
-      passphrase: passOrObj ?? null,
-      config,
+      passphrase: rawPass ?? null,
+      config: normalizedConfig,
     });
   },
 

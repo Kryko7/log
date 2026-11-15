@@ -268,8 +268,64 @@ function buildTimelineRow(entry, notebookName, callbacks, subMode = "weekday") {
     article.appendChild(thumbWrap);
   }
 
+  if (callbacks.onDeleteEntry) {
+    const actionsSlot = el("div", "timeline-row-actions");
+    const renderDeleteTrigger = () => {
+      actionsSlot.innerHTML = "";
+      const delBtn = el("button", "timeline-row-delete-btn");
+      delBtn.type = "button";
+      delBtn.title = "Delete entry";
+      delBtn.setAttribute("aria-label", "Delete entry");
+      delBtn.innerHTML = icon("trash", "tiny-icon");
+      delBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        renderDeleteConfirm();
+      });
+      actionsSlot.appendChild(delBtn);
+    };
+    const renderDeleteConfirm = () => {
+      actionsSlot.innerHTML = "";
+      const confirmWrap = el("div", "timeline-delete-confirm");
+      confirmWrap.addEventListener("click", (ev) => ev.stopPropagation());
+
+      const yesBtn = el("button", "btn-editorial btn-terracotta small", "Delete?");
+      yesBtn.type = "button";
+      const cancelBtn = el("button", "btn-editorial btn-ghost small", "Cancel");
+      cancelBtn.type = "button";
+
+      yesBtn.addEventListener("click", async (ev) => {
+        ev.stopPropagation();
+        yesBtn.disabled = true;
+        cancelBtn.disabled = true;
+        yesBtn.textContent = "Deleting...";
+        try {
+          await callbacks.onDeleteEntry(entry.id);
+        } catch {
+          if (actionsSlot.isConnected) renderDeleteTrigger();
+        }
+      });
+      cancelBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        renderDeleteTrigger();
+      });
+
+      confirmWrap.append(yesBtn, cancelBtn);
+      actionsSlot.appendChild(confirmWrap);
+    };
+    renderDeleteTrigger();
+    article.appendChild(actionsSlot);
+  }
+
   return article;
 }
+
+const NOTEBOOK_ACCENT_PALETTE = [
+  "#546E5A",
+  "#B5563E",
+  "#6D6157",
+  "#4A6670",
+  "#8C6B4A",
+];
 
 /**
  * Render the clean editorial river Timeline grouped by month.
@@ -318,9 +374,323 @@ export function renderTimelineView(container, state, callbacks = {}) {
       subtitlePrefix ? `${subtitlePrefix} · ${countLabel}` : countLabel
     )
   );
-  header.appendChild(titleWrap);
+
+  let panelMode = null;
+  const panelSlot = el("div", "notebook-inline-panel-slot");
+  panelSlot.hidden = true;
+
+  function renderNotebookPanel() {
+    panelSlot.innerHTML = "";
+    if (!selectedNb || !panelMode) {
+      panelSlot.hidden = true;
+      return;
+    }
+    panelSlot.hidden = false;
+
+    if (panelMode === "edit") {
+      const card = el("form", "notebook-inline-card");
+      let draftName = selectedNb.name || "";
+      let draftCover = selectedNb.cover_asset || "";
+      let draftAccent = selectedNb.accent_color || NOTEBOOK_ACCENT_PALETTE[0];
+      let uploading = false;
+
+      const topRow = el("div", "notebook-inline-card-head");
+      topRow.appendChild(el("span", "small-caps-meta", "Edit Notebook"));
+      card.appendChild(topRow);
+
+      const nameInput = document.createElement("input");
+      nameInput.type = "text";
+      nameInput.className = "editorial-input";
+      nameInput.placeholder = "Notebook name";
+      nameInput.value = draftName;
+      nameInput.required = true;
+      nameInput.addEventListener("input", () => {
+        draftName = nameInput.value;
+      });
+      card.appendChild(nameInput);
+
+      const coverRow = el("div", "cover-swatch-row notebook-banner-swatches");
+      const builtInCovers = (state.manifest?.covers || []).slice(0, 4);
+      const renderSwatches = () => {
+        coverRow.innerHTML = "";
+        for (const cov of builtInCovers) {
+          const sw = el(
+            "button",
+            `cover-swatch-btn${draftCover === cov.path ? " selected" : ""}`
+          );
+          sw.type = "button";
+          sw.title = cov.label || "Cover wash";
+          const img = document.createElement("img");
+          img.src = resolveVaultUrl(cov.path);
+          img.alt = cov.label || "Cover";
+          img.decoding = "async";
+          sw.appendChild(img);
+          sw.addEventListener("click", () => {
+            draftCover = cov.path;
+            renderSwatches();
+          });
+          coverRow.appendChild(sw);
+        }
+        const isCustom =
+          Boolean(draftCover) && !builtInCovers.some((c) => c.path === draftCover);
+        if (isCustom) {
+          const customSw = el("button", "cover-swatch-btn selected");
+          customSw.type = "button";
+          customSw.title = "Custom cover picture";
+          const img = document.createElement("img");
+          img.src = resolveVaultUrl(draftCover);
+          img.alt = "Custom cover";
+          img.decoding = "async";
+          customSw.appendChild(img);
+          coverRow.appendChild(customSw);
+        }
+        const noneSw = el(
+          "button",
+          `cover-swatch-btn is-none${!draftCover ? " selected" : ""}`
+        );
+        noneSw.type = "button";
+        noneSw.title = "No cover";
+        noneSw.setAttribute("aria-label", "No cover");
+        noneSw.innerHTML = icon("close", "tiny-icon");
+        noneSw.addEventListener("click", () => {
+          draftCover = "";
+          renderSwatches();
+        });
+        coverRow.appendChild(noneSw);
+      };
+      renderSwatches();
+      card.appendChild(coverRow);
+
+      const toolsRow = el("div", "notebook-inline-tools-row");
+      const accentRow = el("div", "accent-swatch-row");
+      for (const color of NOTEBOOK_ACCENT_PALETTE) {
+        const dot = el(
+          "button",
+          `accent-dot-btn${draftAccent === color ? " selected" : ""}`
+        );
+        dot.type = "button";
+        dot.style.background = color;
+        dot.title = color;
+        dot.addEventListener("click", () => {
+          draftAccent = color;
+          accentRow
+            .querySelectorAll(".accent-dot-btn")
+            .forEach((b) => b.classList.remove("selected"));
+          dot.classList.add("selected");
+        });
+        accentRow.appendChild(dot);
+      }
+      toolsRow.appendChild(accentRow);
+
+      const errEl = el("p", "form-error", "");
+      errEl.hidden = true;
+
+      if (callbacks.onUploadNotebookCover) {
+        const uploadLabel = el("label", "btn-editorial btn-ghost small cover-upload-btn");
+        uploadLabel.innerHTML = `${icon("image", "tiny-icon")}<span>Upload picture</span>`;
+        const fileInput = document.createElement("input");
+        fileInput.type = "file";
+        fileInput.accept = "image/*";
+        fileInput.className = "sr-only";
+        fileInput.addEventListener("change", async () => {
+          const file = fileInput.files?.[0];
+          fileInput.value = "";
+          if (!file || uploading) return;
+          uploading = true;
+          errEl.hidden = true;
+          const span = uploadLabel.querySelector("span");
+          uploadLabel.classList.add("is-busy");
+          if (span) span.textContent = "Uploading...";
+          try {
+            const uploadedPath = await callbacks.onUploadNotebookCover(file);
+            if (uploadedPath) {
+              draftCover = uploadedPath;
+              renderSwatches();
+            }
+          } catch (err) {
+            errEl.textContent = String(err?.message || err || "Upload failed");
+            errEl.hidden = false;
+          } finally {
+            uploading = false;
+            uploadLabel.classList.remove("is-busy");
+            if (span) span.textContent = "Upload picture";
+          }
+        });
+        uploadLabel.appendChild(fileInput);
+        toolsRow.appendChild(uploadLabel);
+      }
+      card.appendChild(toolsRow);
+      card.appendChild(errEl);
+
+      const actionRow = el("div", "inline-notebook-actions");
+      const saveBtn = el("button", "btn-editorial btn-sage small", "Save");
+      saveBtn.type = "submit";
+      const cancelBtn = el("button", "btn-editorial btn-ghost small", "Cancel");
+      cancelBtn.type = "button";
+      cancelBtn.addEventListener("click", () => {
+        panelMode = null;
+        renderNotebookPanel();
+      });
+      actionRow.append(saveBtn, cancelBtn);
+      card.appendChild(actionRow);
+
+      card.addEventListener("submit", async (ev) => {
+        ev.preventDefault();
+        const trimmed = draftName.trim();
+        if (!trimmed || uploading) return;
+        errEl.hidden = true;
+        saveBtn.disabled = true;
+        saveBtn.textContent = "Saving...";
+        try {
+          await callbacks.onUpdateNotebook?.({
+            id: selectedNb.id,
+            name: trimmed,
+            description: selectedNb.description ?? null,
+            cover_asset: draftCover || "",
+            accent_color: draftAccent,
+          });
+          panelMode = null;
+        } catch (err) {
+          errEl.textContent = String(err?.message || err || "Update failed");
+          errEl.hidden = false;
+        } finally {
+          if (saveBtn.isConnected) {
+            saveBtn.disabled = false;
+            saveBtn.textContent = "Save";
+          }
+        }
+      });
+
+      panelSlot.appendChild(card);
+    } else if (panelMode === "delete") {
+      const card = el("div", "notebook-inline-card is-danger");
+      const nbCount = Number(selectedNb.entry_count ?? entries.length ?? 0);
+      card.appendChild(
+        el(
+          "p",
+          "inline-notebook-delete-prompt",
+          `Delete “${selectedNb.name}”?`
+        )
+      );
+      const errEl = el("p", "form-error", "");
+      errEl.hidden = true;
+      card.appendChild(errEl);
+
+      const btns = el("div", "inline-notebook-delete-actions");
+      const runDelete = async (deleteEntries) => {
+        errEl.hidden = true;
+        btns.querySelectorAll("button").forEach((b) => {
+          b.disabled = true;
+        });
+        try {
+          await callbacks.onDeleteNotebook?.(selectedNb.id, deleteEntries);
+        } catch (err) {
+          errEl.textContent = String(err?.message || err || "Delete failed");
+          errEl.hidden = false;
+          btns.querySelectorAll("button").forEach((b) => {
+            b.disabled = false;
+          });
+        }
+      };
+
+      if (nbCount > 0) {
+        const keepBtn = el(
+          "button",
+          "btn-editorial small",
+          `Keep ${nbCount} ${nbCount === 1 ? "entry" : "entries"}`
+        );
+        keepBtn.type = "button";
+        keepBtn.addEventListener("click", () => runDelete(false));
+
+        const wipeBtn = el(
+          "button",
+          "btn-editorial btn-terracotta small",
+          `Delete + ${nbCount} ${nbCount === 1 ? "entry" : "entries"}`
+        );
+        wipeBtn.type = "button";
+        wipeBtn.addEventListener("click", () => runDelete(true));
+
+        btns.append(keepBtn, wipeBtn);
+      } else {
+        const delBtn = el("button", "btn-editorial btn-terracotta small", "Delete");
+        delBtn.type = "button";
+        delBtn.addEventListener("click", () => runDelete(false));
+        btns.appendChild(delBtn);
+      }
+
+      const cancelBtn = el("button", "btn-editorial btn-ghost small", "Cancel");
+      cancelBtn.type = "button";
+      cancelBtn.addEventListener("click", () => {
+        panelMode = null;
+        renderNotebookPanel();
+      });
+      btns.appendChild(cancelBtn);
+      card.appendChild(btns);
+      panelSlot.appendChild(card);
+    }
+  }
+
+  if (selectedNb) {
+    const banner = el("div", "notebook-stage-banner");
+    if (selectedNb.cover_asset) {
+      const frame = el("button", "notebook-cover-frame");
+      frame.type = "button";
+      frame.style.borderColor = selectedNb.accent_color || "var(--border-strong)";
+      frame.title = callbacks.onUpdateNotebook
+        ? "Change notebook cover"
+        : selectedNb.name;
+      const covImg = document.createElement("img");
+      covImg.src = resolveVaultUrl(selectedNb.cover_asset);
+      covImg.alt = `${selectedNb.name} cover`;
+      covImg.decoding = "async";
+      frame.appendChild(covImg);
+      if (callbacks.onUpdateNotebook) {
+        frame.addEventListener("click", () => {
+          panelMode = panelMode === "edit" ? null : "edit";
+          renderNotebookPanel();
+        });
+      }
+      banner.appendChild(frame);
+    } else if (callbacks.onUpdateNotebook) {
+      const placeholder = el("button", "notebook-cover-placeholder");
+      placeholder.type = "button";
+      placeholder.style.borderColor =
+        selectedNb.accent_color || "var(--border-strong)";
+      placeholder.title = "Add notebook cover picture";
+      placeholder.innerHTML = `${icon("image", "tiny-icon")}<span>Add cover</span>`;
+      placeholder.addEventListener("click", () => {
+        panelMode = panelMode === "edit" ? null : "edit";
+        renderNotebookPanel();
+      });
+      banner.appendChild(placeholder);
+    }
+    banner.appendChild(titleWrap);
+    header.appendChild(banner);
+  } else {
+    header.appendChild(titleWrap);
+  }
 
   const headerActions = el("div", "stage-header-actions");
+  if (selectedNb && callbacks.onUpdateNotebook) {
+    const editNbBtn = el("button", "btn-editorial btn-ghost small");
+    editNbBtn.type = "button";
+    editNbBtn.innerHTML = `${icon("edit", "tiny-icon")}<span>Edit Notebook</span>`;
+    editNbBtn.addEventListener("click", () => {
+      panelMode = panelMode === "edit" ? null : "edit";
+      renderNotebookPanel();
+    });
+    headerActions.appendChild(editNbBtn);
+  }
+  if (selectedNb && callbacks.onDeleteNotebook) {
+    const delNbBtn = el("button", "btn-editorial btn-ghost small is-danger");
+    delNbBtn.type = "button";
+    delNbBtn.innerHTML = `${icon("trash", "tiny-icon")}<span>Delete Notebook</span>`;
+    delNbBtn.addEventListener("click", () => {
+      panelMode = panelMode === "delete" ? null : "delete";
+      renderNotebookPanel();
+    });
+    headerActions.appendChild(delNbBtn);
+  }
   if (hasFilter && callbacks.onClearFilters) {
     const clearBtn = el("button", "btn-editorial btn-ghost", clearLabel);
     clearBtn.type = "button";
@@ -340,6 +710,7 @@ export function renderTimelineView(container, state, callbacks = {}) {
     header.appendChild(headerActions);
   }
   section.appendChild(header);
+  section.appendChild(panelSlot);
 
   if (entries.length === 0) {
     const empty = el("div", "editorial-empty-card");

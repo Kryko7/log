@@ -54,9 +54,11 @@ const state = {
   syncResult: null,
   backups: [],
   backupConfig: {
+    destination_dir: null,
     gdrive_folder: "LogJournal",
-    include_media: true,
-    keep_local_snapshots: 7,
+    auto_sync_enabled: false,
+    keep_last_n: 14,
+    has_passphrase_hint: null,
   },
 };
 
@@ -333,6 +335,99 @@ async function navigateToView(viewKey) {
   renderMainView();
 }
 
+async function handleUploadNotebookCover(file) {
+  const photo = await api.uploadPhoto(file, "Notebook cover");
+  return photo.thumbnail_url || photo.url;
+}
+
+async function handleUpdateNotebook(req) {
+  await api.updateNotebook(req);
+  await refreshVaultIndex();
+  renderSidebarOnly();
+  if (state.activeView === "timeline" || state.activeView === "editor") {
+    renderMainView();
+  }
+}
+
+async function handleDeleteNotebook(nbId, deleteEntries = false) {
+  const editingTargetNb = state.currentEntry?.frontmatter?.notebook_id === nbId;
+  if (state.activeView === "editor" && activeEditorHandle) {
+    if (deleteEntries && editingTargetNb) {
+      activeEditorHandle.destroy?.();
+      activeEditorHandle = null;
+    } else {
+      await activeEditorHandle.flushSave?.();
+    }
+  }
+
+  const deletedCurrentId =
+    deleteEntries && editingTargetNb ? state.currentEntry?.id : null;
+  const currentIdBefore = state.currentEntry?.id || null;
+
+  const res = await api.deleteNotebook(nbId, deleteEntries);
+  if (state.selectedNotebookId === nbId) {
+    state.selectedNotebookId = null;
+  }
+  await refreshVaultIndex();
+
+  if (editingTargetNb) {
+    if (deleteEntries || (deletedCurrentId && currentIdBefore === deletedCurrentId)) {
+      const next = state.filteredEntries[0] || state.entries[0] || null;
+      if (next) {
+        try {
+          state.currentEntry = await api.getEntry(next.id);
+        } catch {
+          state.currentEntry = createBlankEntry();
+        }
+      } else {
+        state.currentEntry = createBlankEntry();
+      }
+    } else if (currentIdBefore) {
+      try {
+        state.currentEntry = await api.getEntry(currentIdBefore);
+      } catch {
+        state.currentEntry = createBlankEntry();
+      }
+    } else if (state.currentEntry?.frontmatter) {
+      state.currentEntry.frontmatter.notebook_id =
+        res?.reassigned_to || state.notebooks?.[0]?.id || "daily";
+    }
+  }
+
+  if (state.activeView === "calendar") {
+    await loadCalendarMonth(state.calendarYear, state.calendarMonth);
+  }
+  renderSidebarOnly();
+  renderMainView();
+}
+
+async function handleDeleteEntry(id) {
+  if (!id) return;
+  if (state.currentEntry?.id === id && activeEditorHandle) {
+    activeEditorHandle.destroy?.();
+    activeEditorHandle = null;
+  }
+  await api.deleteEntry(id);
+  await refreshVaultIndex();
+  if (state.currentEntry?.id === id) {
+    const next = state.filteredEntries[0] || state.entries[0] || null;
+    if (next) {
+      try {
+        state.currentEntry = await api.getEntry(next.id);
+      } catch {
+        state.currentEntry = createBlankEntry();
+      }
+    } else {
+      state.currentEntry = createBlankEntry();
+    }
+  }
+  if (state.activeView === "calendar") {
+    await loadCalendarMonth(state.calendarYear, state.calendarMonth);
+  }
+  renderSidebarOnly();
+  renderMainView();
+}
+
 function getSidebarCallbacks() {
   return {
     onToggleSidebar: () => applySidebarCollapsed(!state.sidebarCollapsed),
@@ -349,6 +444,9 @@ function getSidebarCallbacks() {
       renderSidebarOnly();
       renderMainView();
     },
+    onUpdateNotebook: handleUpdateNotebook,
+    onDeleteNotebook: handleDeleteNotebook,
+    onUploadNotebookCover: handleUploadNotebookCover,
     onSelectNotebook: async (nbId) => {
       if (state.activeView === "editor") {
         await activeEditorHandle?.flushSave();
@@ -423,18 +521,7 @@ function renderMainView() {
         }
         return saved;
       },
-      onDeleteEntry: async (id) => {
-        await api.deleteEntry(id);
-        await refreshVaultIndex();
-        const next = state.filteredEntries[0] || state.entries[0] || null;
-        if (next) {
-          state.currentEntry = await api.getEntry(next.id);
-        } else {
-          state.currentEntry = createBlankEntry();
-        }
-        renderSidebarOnly();
-        renderMainView();
-      },
+      onDeleteEntry: (id) => handleDeleteEntry(id),
     });
     return;
   }
@@ -450,6 +537,10 @@ function renderMainView() {
       },
       onClearFilters: () => navigateToView("timeline"),
       onNewEntry: () => startNewEntry(),
+      onUpdateNotebook: handleUpdateNotebook,
+      onDeleteNotebook: handleDeleteNotebook,
+      onUploadNotebookCover: handleUploadNotebookCover,
+      onDeleteEntry: (id) => handleDeleteEntry(id),
     });
     return;
   }
@@ -489,6 +580,7 @@ function renderMainView() {
       },
       onOpenEntry: (id) => openEntryById(id),
       onNewEntryForDate: (dateStr) => startNewEntry(dateStr),
+      onDeleteEntry: (id) => handleDeleteEntry(id),
     });
     return;
   }
@@ -496,6 +588,7 @@ function renderMainView() {
   if (state.activeView === "on_this_day") {
     renderOnThisDayView(viewRoot, state, {
       onOpenEntry: (id) => openEntryById(id),
+      onDeleteEntry: (id) => handleDeleteEntry(id),
     });
   }
 }
@@ -752,7 +845,9 @@ function renderModal() {
           });
           state.syncResult = {
             success: true,
-            message: `Restored ${res.restored_files} files to ${res.target_dir}.`,
+            message:
+              res.message ||
+              `Restored ${res.entries_restored ?? 0} entries and ${res.media_restored ?? 0} media files to ${res.target_vault_dir}.`,
           };
           await refreshVaultIndex();
         } catch (err) {

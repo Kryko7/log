@@ -6,9 +6,10 @@ use std::time::UNIX_EPOCH;
 
 use chrono::{Datelike, Utc};
 use journal_types::{
-    BacklinkRef, CalendarDaySummary, CreateNotebookRequest, DeleteEntryResponse, Entry,
-    EntryFrontmatter, EntrySummary, Notebook, OnThisDayGroup, PolaroidMeta, SaveEntryRequest,
-    SearchHit, SearchQuery, TagCount, Template, VaultStats, VoiceMemoMeta,
+    BacklinkRef, CalendarDaySummary, CreateNotebookRequest, DeleteEntryResponse,
+    DeleteNotebookResponse, Entry, EntryFrontmatter, EntrySummary, Notebook, OnThisDayGroup,
+    PolaroidMeta, SaveEntryRequest, SearchHit, SearchQuery, TagCount, Template,
+    UpdateNotebookRequest, VaultStats, VoiceMemoMeta,
 };
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use rusqlite::Connection;
@@ -271,6 +272,181 @@ impl Vault {
         index::sync_notebooks_table(&conn, &notebooks)?;
 
         Ok(nb)
+    }
+
+    /// Update an existing notebook's name, description, cover asset, or accent color.
+    pub fn update_notebook(&self, req: UpdateNotebookRequest) -> Result<Notebook> {
+        let target_id = req.id.trim();
+        if target_id.is_empty() {
+            return Err(VaultError::InvalidInput(
+                "Notebook id cannot be empty".to_string(),
+            ));
+        }
+        let name = req.name.trim();
+        if name.is_empty() {
+            return Err(VaultError::InvalidInput(
+                "Notebook name cannot be empty".to_string(),
+            ));
+        }
+
+        let mut notebooks = self.read_notebooks_file()?;
+        let Some(nb) = notebooks.iter_mut().find(|n| n.id == target_id) else {
+            return Err(VaultError::NotFound(format!(
+                "Notebook not found: {target_id}"
+            )));
+        };
+
+        nb.name = name.to_string();
+        if let Some(desc) = req.description {
+            let trimmed = desc.trim();
+            nb.description = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            };
+        }
+        if let Some(cover) = req.cover_asset {
+            nb.cover_asset = cover.trim().to_string();
+        }
+        if let Some(accent) = req.accent_color {
+            let trimmed = accent.trim();
+            if !trimmed.is_empty() {
+                nb.accent_color = trimmed.to_string();
+            }
+        }
+        let mut updated = nb.clone();
+
+        self.write_notebooks_file(&notebooks)?;
+
+        let mut conn = self.conn.lock().map_err(|_| VaultError::LockPoisoned)?;
+        let tx = conn.transaction()?;
+        index::sync_notebooks_table(&tx, &notebooks)?;
+        tx.commit()?;
+
+        let counts = index::notebook_entry_counts(&conn)?;
+        updated.entry_count = counts.get(target_id).copied().unwrap_or(0);
+        Ok(updated)
+    }
+
+    /// Delete a notebook and either delete its entries or reassign them to the first remaining notebook.
+    pub fn delete_notebook(
+        &self,
+        id: &str,
+        delete_entries: bool,
+    ) -> Result<DeleteNotebookResponse> {
+        let target_id = id.trim();
+        if target_id.is_empty() {
+            return Ok(DeleteNotebookResponse {
+                deleted: false,
+                id: String::new(),
+                deleted_entries: 0,
+                reassigned_to: None,
+            });
+        }
+
+        let mut notebooks = self.read_notebooks_file()?;
+        let orig_len = notebooks.len();
+        notebooks.retain(|n| n.id != target_id);
+        let had_notebook = notebooks.len() != orig_len;
+
+        let entries_in_nb = {
+            let conn = self.conn.lock().map_err(|_| VaultError::LockPoisoned)?;
+            index::list_entry_ids_and_paths_for_notebook(&conn, target_id)?
+        };
+
+        if !had_notebook && entries_in_nb.is_empty() {
+            return Ok(DeleteNotebookResponse {
+                deleted: false,
+                id: target_id.to_string(),
+                deleted_entries: 0,
+                reassigned_to: None,
+            });
+        }
+
+        if delete_entries {
+            let mut conn = self.conn.lock().map_err(|_| VaultError::LockPoisoned)?;
+            let tx = conn.transaction()?;
+            for (entry_id, _) in &entries_in_nb {
+                index::delete_entry_from_index(&tx, *entry_id)?;
+            }
+            index::sync_notebooks_table(&tx, &notebooks)?;
+            tx.commit()?;
+            drop(conn);
+
+            self.write_notebooks_file(&notebooks)?;
+
+            let mut deleted_count = 0usize;
+            for (_, rel_path) in &entries_in_nb {
+                if is_safe_vault_rel_path(rel_path) {
+                    let abs_path = self.root.join(rel_path);
+                    if abs_path.exists() {
+                        fs::remove_file(&abs_path)?;
+                    }
+                }
+                deleted_count += 1;
+            }
+
+            return Ok(DeleteNotebookResponse {
+                deleted: true,
+                id: target_id.to_string(),
+                deleted_entries: deleted_count,
+                reassigned_to: None,
+            });
+        }
+
+        let fallback_nb = notebooks.first().map(|n| n.id.clone());
+        let mut updated_entries = Vec::with_capacity(entries_in_nb.len());
+
+        for (_, rel_path) in &entries_in_nb {
+            if !is_safe_vault_rel_path(rel_path) {
+                return Err(VaultError::InvalidInput(format!(
+                    "Unsafe vault entry path: {rel_path}"
+                )));
+            }
+            let abs_path = self.root.join(rel_path);
+            let raw = fs::read_to_string(&abs_path)?;
+            let mut entry = parse_entry_file_no_html(&raw, rel_path)?;
+            entry.frontmatter.notebook_id = fallback_nb.clone();
+
+            let new_rel_path = match fallback_nb.as_deref() {
+                Some(fb_id) => self.allocate_entry_rel_path(
+                    &slugify(fb_id),
+                    &entry.frontmatter,
+                    Some(rel_path),
+                ),
+                None => rel_path.clone(),
+            };
+            let new_abs_path = self.root.join(&new_rel_path);
+            let serialized = serialize_entry(&entry.frontmatter, &entry.body)?;
+            write_bytes_atomic(&new_abs_path, serialized.as_bytes())?;
+
+            if new_rel_path != *rel_path && abs_path.exists() {
+                let _ = fs::remove_file(&abs_path);
+            }
+
+            let (mtime, size) = file_stat(&new_abs_path)?;
+            entry.path = new_rel_path;
+            updated_entries.push((entry, mtime, size));
+        }
+
+        {
+            let mut conn = self.conn.lock().map_err(|_| VaultError::LockPoisoned)?;
+            let tx = conn.transaction()?;
+            for (entry, mtime, size) in &updated_entries {
+                index::upsert_entry_with_stat(&tx, entry, *mtime, *size)?;
+            }
+            index::sync_notebooks_table(&tx, &notebooks)?;
+            tx.commit()?;
+        }
+
+        self.write_notebooks_file(&notebooks)?;
+
+        Ok(DeleteNotebookResponse {
+            deleted: true,
+            id: target_id.to_string(),
+            deleted_entries: 0,
+            reassigned_to: fallback_nb,
+        })
     }
 
     /// List entry summaries filtered by optional `notebook_id`, `tag`, `limit`, and `offset`.

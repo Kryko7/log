@@ -441,6 +441,25 @@ pub fn list_notebooks_with_counts(conn: &Connection) -> Result<Vec<Notebook>> {
     Ok(notebooks)
 }
 
+/// List `(id, path)` pairs for all entries currently belonging to `notebook_id`.
+pub fn list_entry_ids_and_paths_for_notebook(
+    conn: &Connection,
+    notebook_id: &str,
+) -> Result<Vec<(Uuid, String)>> {
+    let mut stmt = conn.prepare("SELECT id, path FROM entries WHERE notebook_id = ?1")?;
+    let rows = stmt.query_map(params![notebook_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut out = Vec::new();
+    for r in rows {
+        let (id_str, path) = r?;
+        let uuid = Uuid::parse_str(&id_str)
+            .map_err(|e| VaultError::InvalidInput(format!("Corrupt UUID in index: {e}")))?;
+        out.push((uuid, path));
+    }
+    Ok(out)
+}
+
 /// Count entries per `notebook_id`.
 pub fn notebook_entry_counts(conn: &Connection) -> Result<BTreeMap<String, usize>> {
     let mut stmt = conn.prepare(

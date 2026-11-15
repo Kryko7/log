@@ -541,14 +541,13 @@ pub struct BackupInfo {
 
 /// User-configurable backup & Google Drive `age`-encryption settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct BackupConfig {
-    #[serde(default)]
     pub destination_dir: Option<String>,
     pub gdrive_folder: String,
-    #[serde(default)]
     pub auto_sync_enabled: bool,
+    #[serde(alias = "keep_local_snapshots")]
     pub keep_last_n: usize,
-    #[serde(default)]
     pub has_passphrase_hint: Option<String>,
 }
 
@@ -689,6 +688,29 @@ pub struct CreateNotebookRequest {
     pub cover_asset: Option<String>,
     #[serde(default)]
     pub accent_color: Option<String>,
+}
+
+/// Request to update an existing notebook's name, description, cover, or accent color.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UpdateNotebookRequest {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub cover_asset: Option<String>,
+    #[serde(default)]
+    pub accent_color: Option<String>,
+}
+
+/// Confirmation returned when a notebook is deleted from the vault.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeleteNotebookResponse {
+    pub deleted: bool,
+    pub id: String,
+    pub deleted_entries: usize,
+    #[serde(default)]
+    pub reassigned_to: Option<String>,
 }
 
 /// Confirmation returned when an entry is removed from the vault.
@@ -1021,6 +1043,19 @@ mod tests {
             cover_asset: Some("/assets/covers/pressed-wildflowers.png".into()),
             accent_color: Some("#B5563E".into()),
         };
+        let update_nb = UpdateNotebookRequest {
+            id: "field-sketchbook".into(),
+            name: "Field Journal".into(),
+            description: Some("Updated description".into()),
+            cover_asset: Some("/vault-thumbs/custom.webp".into()),
+            accent_color: Some("#546E5A".into()),
+        };
+        let del_nb_resp = DeleteNotebookResponse {
+            deleted: true,
+            id: "field-sketchbook".into(),
+            deleted_entries: 0,
+            reassigned_to: Some("daily".into()),
+        };
         let del_resp = DeleteEntryResponse {
             deleted: true,
             id: entry_id,
@@ -1050,8 +1085,24 @@ mod tests {
         round_trip(&import_do);
         round_trip(&import_notion);
         round_trip(&create_nb);
+        round_trip(&update_nb);
+        round_trip(&del_nb_resp);
         round_trip(&del_resp);
         round_trip(&restore_req);
         round_trip(&restore_resp);
+    }
+
+    #[test]
+    fn backup_config_deserializes_partial_and_legacy_alias() {
+        let empty: BackupConfig = serde_json::from_str("{}").expect("empty BackupConfig");
+        assert_eq!(empty, BackupConfig::default());
+
+        let legacy: BackupConfig =
+            serde_json::from_str(r#"{"gdrive_folder":"CustomFolder","keep_local_snapshots":7}"#)
+                .expect("legacy keep_local_snapshots alias");
+        assert_eq!(legacy.gdrive_folder, "CustomFolder");
+        assert_eq!(legacy.keep_last_n, 7);
+        assert!(!legacy.auto_sync_enabled);
+        assert_eq!(legacy.destination_dir, None);
     }
 }

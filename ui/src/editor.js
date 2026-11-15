@@ -488,6 +488,7 @@ export function renderEntryEditor(container, state, callbacks = {}) {
         const structural = pendingStructuralRefresh || !draft.id;
         pendingStructuralRefresh = false;
         saving = true;
+        let assignedNewId = false;
         updateSaveIndicator();
         try {
           const saved = await callbacks.onSaveEntry?.(buildSavePayload(), {
@@ -499,6 +500,9 @@ export function renderEntryEditor(container, state, callbacks = {}) {
             draft.path = saved.path || draft.path;
             if (Array.isArray(saved.backlinks)) {
               draft.backlinks = saved.backlinks;
+            }
+            if (hadNoId && saved.id) {
+              assignedNewId = true;
             }
             if (hadNoId && coverAsset) {
               sessionEntryCovers.delete("__draft__");
@@ -517,6 +521,9 @@ export function renderEntryEditor(container, state, callbacks = {}) {
         }
         saving = false;
         updateSaveIndicator();
+        if (assignedNewId && !disposed) {
+          renderTopbar();
+        }
         if (!disposed) {
           updateDatelineAndLedger(true);
         }
@@ -761,10 +768,13 @@ export function renderEntryEditor(container, state, callbacks = {}) {
       if (!deleteConfirmOpen) {
         const delBtn = document.createElement("button");
         delBtn.type = "button";
-        delBtn.className = "topbar-icon-btn";
+        delBtn.className = "topbar-ghost-btn topbar-delete-btn";
         delBtn.title = "Delete entry";
         delBtn.setAttribute("aria-label", "Delete entry");
         delBtn.appendChild(iconNode("trash", "tiny-icon"));
+        const delLabel = document.createElement("span");
+        delLabel.textContent = "Delete";
+        delBtn.appendChild(delLabel);
         delBtn.addEventListener("click", () => {
           deleteConfirmOpen = true;
           renderTopbar();
@@ -776,10 +786,32 @@ export function renderEntryEditor(container, state, callbacks = {}) {
         const confirmBtn = document.createElement("button");
         confirmBtn.type = "button";
         confirmBtn.className = "topbar-danger-btn";
-        confirmBtn.textContent = "Delete?";
+        confirmBtn.textContent = "Confirm Delete";
         confirmBtn.addEventListener("click", async () => {
+          if (saveTimer) {
+            clearTimeout(saveTimer);
+            saveTimer = null;
+          }
+          dirty = false;
+          editVersion = savedVersion;
+          disposed = true;
+          confirmBtn.disabled = true;
+          confirmBtn.textContent = "Deleting...";
+          if (inFlightSave) {
+            await inFlightSave.catch(() => {});
+          }
           if (draft.id) sessionEntryCovers.delete(draft.id);
-          await callbacks.onDeleteEntry?.(draft.id);
+          try {
+            await callbacks.onDeleteEntry?.(draft.id);
+          } catch (err) {
+            disposed = false;
+            deleteConfirmOpen = false;
+            renderTopbar();
+            if (saveIndicatorEl) {
+              saveIndicatorEl.classList.add("is-dirty");
+              saveIndicatorEl.textContent = err?.message || "Delete failed";
+            }
+          }
         });
         const cancelDelBtn = document.createElement("button");
         cancelDelBtn.type = "button";

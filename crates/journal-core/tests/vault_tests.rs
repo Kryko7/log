@@ -7,11 +7,11 @@ use std::time::Duration;
 use chrono::{Datelike, TimeZone, Utc};
 use image::{DynamicImage, GenericImageView, ImageFormat, Rgb, RgbImage};
 use journal_core::{
-    extract_wikilinks, parse_entry_file, render_html_preview, serialize_entry, Vault,
+    extract_wikilinks, parse_entry_file, render_html_preview, serialize_entry, Vault, VaultError,
 };
 use journal_types::{
     CreateNotebookRequest, EntryFrontmatter, GeoLocation, SaveEntryRequest, SearchQuery,
-    StampPlacement, WeatherInfo,
+    StampPlacement, UpdateNotebookRequest, WeatherInfo,
 };
 use uuid::Uuid;
 
@@ -888,6 +888,206 @@ fn editing_entry_removes_deleted_wikilinks_from_backlinks() {
         .save_entry_with_frontmatter(fm, "Removed the link now.")
         .unwrap();
     assert_eq!(vault.get_backlinks(target.id).unwrap().len(), 0);
+}
+
+#[test]
+fn update_notebook_updates_name_cover_accent_and_preserves_entry_count() {
+    let tmp = TempVault::new("update-notebook");
+    let vault = Vault::open(&tmp.path).unwrap();
+
+    let created = vault
+        .create_notebook(CreateNotebookRequest {
+            name: "Field Notes".into(),
+            description: Some("Initial description".into()),
+            cover_asset: None,
+            accent_color: Some("#546E5A".into()),
+        })
+        .unwrap();
+    assert_eq!(created.id, "field-notes");
+
+    vault
+        .save_entry(SaveEntryRequest {
+            id: None,
+            title: "Mossy Stone".into(),
+            date: None,
+            notebook_id: Some(created.id.clone()),
+            tags: vec![],
+            mood: None,
+            starred: false,
+            weather: None,
+            location: None,
+            stamps: vec![],
+            photos: vec![],
+            audio: vec![],
+            body: "Observing lichen.".into(),
+        })
+        .unwrap();
+
+    let updated = vault
+        .update_notebook(UpdateNotebookRequest {
+            id: created.id.clone(),
+            name: "Botanical Field Notes".into(),
+            description: Some("Pressed specimens and rain walks".into()),
+            cover_asset: Some("/vault-thumbs/custom-cover.webp".into()),
+            accent_color: Some("#B5563E".into()),
+        })
+        .unwrap();
+    assert_eq!(updated.name, "Botanical Field Notes");
+    assert_eq!(
+        updated.description.as_deref(),
+        Some("Pressed specimens and rain walks")
+    );
+    assert_eq!(updated.cover_asset, "/vault-thumbs/custom-cover.webp");
+    assert_eq!(updated.accent_color, "#B5563E");
+    assert_eq!(updated.entry_count, 1);
+
+    let listed = vault
+        .list_notebooks()
+        .unwrap()
+        .into_iter()
+        .find(|n| n.id == created.id)
+        .unwrap();
+    assert_eq!(listed.name, "Botanical Field Notes");
+    assert_eq!(listed.cover_asset, "/vault-thumbs/custom-cover.webp");
+    assert_eq!(listed.accent_color, "#B5563E");
+    assert_eq!(listed.entry_count, 1);
+
+    let cleared = vault
+        .update_notebook(UpdateNotebookRequest {
+            id: created.id.clone(),
+            name: "Botanical Field Notes".into(),
+            description: Some("   ".into()),
+            cover_asset: Some("".into()),
+            accent_color: None,
+        })
+        .unwrap();
+    assert_eq!(cleared.description, None);
+    assert_eq!(cleared.cover_asset, "");
+    assert_eq!(cleared.accent_color, "#B5563E");
+
+    let missing_err = vault
+        .update_notebook(UpdateNotebookRequest {
+            id: "does-not-exist".into(),
+            name: "Missing".into(),
+            description: None,
+            cover_asset: None,
+            accent_color: None,
+        })
+        .unwrap_err();
+    assert!(matches!(missing_err, VaultError::NotFound(_)));
+
+    let invalid_err = vault
+        .update_notebook(UpdateNotebookRequest {
+            id: created.id,
+            name: "   ".into(),
+            description: None,
+            cover_asset: None,
+            accent_color: None,
+        })
+        .unwrap_err();
+    assert!(matches!(invalid_err, VaultError::InvalidInput(_)));
+}
+
+#[test]
+fn delete_notebook_reassign_and_delete_entries() {
+    let tmp = TempVault::new("delete-notebook");
+    let vault = Vault::open(&tmp.path).unwrap();
+
+    let keep_nb = vault
+        .create_notebook(CreateNotebookRequest {
+            name: "Keep Entries".into(),
+            description: None,
+            cover_asset: None,
+            accent_color: None,
+        })
+        .unwrap();
+    let drop_nb = vault
+        .create_notebook(CreateNotebookRequest {
+            name: "Drop Entries".into(),
+            description: None,
+            cover_asset: None,
+            accent_color: None,
+        })
+        .unwrap();
+
+    let kept_entry = vault
+        .save_entry(SaveEntryRequest {
+            id: None,
+            title: "Reassigned Note".into(),
+            date: None,
+            notebook_id: Some(keep_nb.id.clone()),
+            tags: vec!["migration".into()],
+            mood: None,
+            starred: false,
+            weather: None,
+            location: None,
+            stamps: vec![],
+            photos: vec![],
+            audio: vec![],
+            body: "Should move to daily.".into(),
+        })
+        .unwrap();
+    let old_kept_abs = tmp.path.join(&kept_entry.path);
+    assert!(old_kept_abs.exists());
+
+    let dropped_entry = vault
+        .save_entry(SaveEntryRequest {
+            id: None,
+            title: "Deleted Note".into(),
+            date: None,
+            notebook_id: Some(drop_nb.id.clone()),
+            tags: vec![],
+            mood: None,
+            starred: false,
+            weather: None,
+            location: None,
+            stamps: vec![],
+            photos: vec![],
+            audio: vec![],
+            body: "Should be deleted with notebook.".into(),
+        })
+        .unwrap();
+    let dropped_abs = tmp.path.join(&dropped_entry.path);
+    assert!(dropped_abs.exists());
+
+    let reassign_res = vault.delete_notebook(&keep_nb.id, false).unwrap();
+    assert!(reassign_res.deleted);
+    assert_eq!(reassign_res.id, keep_nb.id);
+    assert_eq!(reassign_res.deleted_entries, 0);
+    assert_eq!(reassign_res.reassigned_to.as_deref(), Some("daily"));
+    assert!(!old_kept_abs.exists());
+
+    let moved_entry = vault.get_entry(&kept_entry.id.to_string()).unwrap();
+    assert_eq!(
+        moved_entry.frontmatter.notebook_id.as_deref(),
+        Some("daily")
+    );
+    assert!(moved_entry.path.starts_with("entries/daily/"));
+    assert!(tmp.path.join(&moved_entry.path).exists());
+
+    let drop_res = vault.delete_notebook(&drop_nb.id, true).unwrap();
+    assert!(drop_res.deleted);
+    assert_eq!(drop_res.id, drop_nb.id);
+    assert_eq!(drop_res.deleted_entries, 1);
+    assert_eq!(drop_res.reassigned_to, None);
+    assert!(!dropped_abs.exists());
+    assert!(matches!(
+        vault.get_entry(&dropped_entry.id.to_string()),
+        Err(VaultError::NotFound(_))
+    ));
+
+    let missing_res = vault.delete_notebook("nonexistent", false).unwrap();
+    assert!(!missing_res.deleted);
+    assert_eq!(missing_res.deleted_entries, 0);
+    assert_eq!(missing_res.reassigned_to, None);
+
+    let remaining_ids: Vec<String> = vault
+        .list_notebooks()
+        .unwrap()
+        .into_iter()
+        .map(|n| n.id)
+        .collect();
+    assert_eq!(remaining_ids, vec!["daily".to_string()]);
 }
 
 /// Build a valid JPEG APP1 EXIF segment (little-endian TIFF) with DateTimeOriginal & GPS.

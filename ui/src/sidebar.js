@@ -1,4 +1,5 @@
 import { icon } from "./icons.js";
+import { resolveVaultUrl } from "./ipc.js";
 
 const ACCENT_PALETTE = [
   "#546E5A",
@@ -14,12 +15,230 @@ let draftNbCover = null;
 let draftNbAccent = ACCENT_PALETTE[0];
 let draftNbBusy = false;
 
+let editingNotebookId = null;
+let editNbName = "";
+let editNbCover = "";
+let editNbAccent = ACCENT_PALETTE[0];
+let editNbBusy = false;
+
+let deletingNotebookId = null;
+let deleteNbBusy = false;
+
 function iconEl(name, cls = "log-icon") {
   const wrap = document.createElement("span");
   wrap.style.display = "inline-flex";
   wrap.style.alignItems = "center";
   wrap.innerHTML = icon(name, cls);
   return wrap.firstElementChild || wrap;
+}
+
+function buildNotebookForm({
+  state,
+  callbacks,
+  initialName,
+  initialCover,
+  initialAccent,
+  submitLabel,
+  busyLabel,
+  isBusy,
+  onNameChange,
+  onCoverChange,
+  onAccentChange,
+  onSubmit,
+  onCancel,
+}) {
+  let currentName = initialName || "";
+  let currentCover = initialCover || "";
+  let currentAccent = initialAccent || ACCENT_PALETTE[0];
+  let uploading = false;
+
+  const form = document.createElement("form");
+  form.className = "inline-notebook-form";
+
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.className = "editorial-input";
+  nameInput.placeholder = "Notebook name";
+  nameInput.value = currentName;
+  nameInput.required = true;
+  nameInput.addEventListener("input", () => {
+    currentName = nameInput.value;
+    onNameChange?.(currentName);
+  });
+  form.appendChild(nameInput);
+
+  const coverRow = document.createElement("div");
+  coverRow.className = "cover-swatch-row";
+  const builtInCovers = (state.manifest?.covers || []).slice(0, 4);
+
+  function renderCoverSwatches() {
+    coverRow.innerHTML = "";
+    for (const cov of builtInCovers) {
+      const sw = document.createElement("button");
+      sw.type = "button";
+      sw.className = `cover-swatch-btn${
+        currentCover === cov.path ? " selected" : ""
+      }`;
+      sw.title = cov.label || "Cover wash";
+      const img = document.createElement("img");
+      img.src = resolveVaultUrl(cov.path);
+      img.alt = cov.label || "Cover";
+      img.decoding = "async";
+      sw.appendChild(img);
+      sw.addEventListener("click", () => {
+        currentCover = cov.path;
+        onCoverChange?.(currentCover);
+        renderCoverSwatches();
+      });
+      coverRow.appendChild(sw);
+    }
+
+    const isCustomCover =
+      Boolean(currentCover) &&
+      !builtInCovers.some((cov) => cov.path === currentCover);
+    if (isCustomCover) {
+      const customSw = document.createElement("button");
+      customSw.type = "button";
+      customSw.className = "cover-swatch-btn selected";
+      customSw.title = "Custom cover picture";
+      const img = document.createElement("img");
+      img.src = resolveVaultUrl(currentCover);
+      img.alt = "Custom notebook cover";
+      img.decoding = "async";
+      customSw.appendChild(img);
+      customSw.addEventListener("click", () => {
+        onCoverChange?.(currentCover);
+        renderCoverSwatches();
+      });
+      coverRow.appendChild(customSw);
+    }
+
+    const noneSw = document.createElement("button");
+    noneSw.type = "button";
+    noneSw.className = `cover-swatch-btn is-none${
+      !currentCover ? " selected" : ""
+    }`;
+    noneSw.title = "No cover";
+    noneSw.setAttribute("aria-label", "No cover");
+    noneSw.appendChild(iconEl("close", "tiny-icon"));
+    noneSw.addEventListener("click", () => {
+      currentCover = "";
+      onCoverChange?.("");
+      renderCoverSwatches();
+    });
+    coverRow.appendChild(noneSw);
+  }
+  renderCoverSwatches();
+  form.appendChild(coverRow);
+
+  const errorEl = document.createElement("p");
+  errorEl.className = "form-error";
+  errorEl.hidden = true;
+
+  if (callbacks.onUploadNotebookCover) {
+    const uploadWrap = document.createElement("label");
+    uploadWrap.className = "btn-editorial btn-ghost small cover-upload-btn";
+    const uploadIcon = iconEl("image", "tiny-icon");
+    const uploadSpan = document.createElement("span");
+    uploadSpan.textContent = "Upload picture";
+    const fileInput = document.createElement("input");
+    fileInput.type = "file";
+    fileInput.accept = "image/*";
+    fileInput.className = "sr-only";
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files?.[0];
+      fileInput.value = "";
+      if (!file || uploading) return;
+      uploading = true;
+      errorEl.hidden = true;
+      uploadWrap.classList.add("is-busy");
+      uploadSpan.textContent = "Uploading...";
+      try {
+        const uploadedPath = await callbacks.onUploadNotebookCover(file);
+        if (uploadedPath) {
+          currentCover = uploadedPath;
+          onCoverChange?.(currentCover);
+          renderCoverSwatches();
+        }
+      } catch (err) {
+        errorEl.textContent = String(err?.message || err || "Upload failed");
+        errorEl.hidden = false;
+      } finally {
+        uploading = false;
+        uploadWrap.classList.remove("is-busy");
+        uploadSpan.textContent = "Upload picture";
+      }
+    });
+    uploadWrap.append(uploadIcon, uploadSpan, fileInput);
+    form.appendChild(uploadWrap);
+  }
+
+  const accentRow = document.createElement("div");
+  accentRow.className = "accent-swatch-row";
+  for (const color of ACCENT_PALETTE) {
+    const dot = document.createElement("button");
+    dot.type = "button";
+    dot.className = `accent-dot-btn${
+      currentAccent === color ? " selected" : ""
+    }`;
+    dot.style.background = color;
+    dot.title = color;
+    dot.addEventListener("click", () => {
+      currentAccent = color;
+      onAccentChange?.(color);
+      accentRow
+        .querySelectorAll(".accent-dot-btn")
+        .forEach((b) => b.classList.remove("selected"));
+      dot.classList.add("selected");
+    });
+    accentRow.appendChild(dot);
+  }
+  form.appendChild(accentRow);
+  form.appendChild(errorEl);
+
+  const submitRow = document.createElement("div");
+  submitRow.className = "inline-notebook-actions";
+
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "submit";
+  saveBtn.className = "btn-editorial btn-sage small";
+  saveBtn.textContent = isBusy ? busyLabel : submitLabel;
+  saveBtn.disabled = Boolean(isBusy);
+
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.className = "btn-editorial btn-ghost small";
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.addEventListener("click", () => onCancel?.());
+
+  submitRow.append(saveBtn, cancelBtn);
+  form.appendChild(submitRow);
+
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const trimmed = currentName.trim();
+    if (!trimmed || uploading) return;
+    errorEl.hidden = true;
+    saveBtn.disabled = true;
+    saveBtn.textContent = busyLabel;
+    try {
+      await onSubmit?.({
+        name: trimmed,
+        cover_asset: currentCover || "",
+        accent_color: currentAccent,
+      });
+    } catch (err) {
+      errorEl.textContent = String(err?.message || err || "Action failed");
+      errorEl.hidden = false;
+    } finally {
+      if (saveBtn.isConnected) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = submitLabel;
+      }
+    }
+  });
+
+  return form;
 }
 
 export function renderSidebar(container, state, callbacks = {}) {
@@ -154,8 +373,12 @@ export function renderSidebar(container, state, callbacks = {}) {
   addNbBtn.appendChild(iconEl(addNotebookOpen ? "close" : "plus", "tiny-icon"));
   addNbBtn.addEventListener("click", () => {
     addNotebookOpen = !addNotebookOpen;
-    if (addNotebookOpen && !draftNbCover) {
-      draftNbCover = state.manifest?.covers?.[0]?.path || null;
+    if (addNotebookOpen) {
+      editingNotebookId = null;
+      deletingNotebookId = null;
+      if (!draftNbCover) {
+        draftNbCover = state.manifest?.covers?.[0]?.path || null;
+      }
     }
     renderSidebar(container, state, callbacks);
   });
@@ -164,117 +387,46 @@ export function renderSidebar(container, state, callbacks = {}) {
   nbSection.appendChild(nbHead);
 
   if (addNotebookOpen) {
-    const form = document.createElement("form");
-    form.className = "inline-notebook-form";
-
-    const nameInput = document.createElement("input");
-    nameInput.type = "text";
-    nameInput.className = "editorial-input";
-    nameInput.placeholder = "Notebook name";
-    nameInput.value = draftNbName;
-    nameInput.required = true;
-    nameInput.addEventListener("input", () => {
-      draftNbName = nameInput.value;
-    });
-    form.appendChild(nameInput);
-
-    const covers = (state.manifest?.covers || []).slice(0, 4);
-    if (covers.length > 0) {
-      const coverRow = document.createElement("div");
-      coverRow.className = "cover-swatch-row";
-      for (const cov of covers) {
-        const sw = document.createElement("button");
-        sw.type = "button";
-        sw.className = `cover-swatch-btn${
-          draftNbCover === cov.path ? " selected" : ""
-        }`;
-        sw.title = cov.label || "Cover wash";
-        const img = document.createElement("img");
-        img.src = cov.path;
-        img.alt = cov.label || "Cover";
-        img.decoding = "async";
-        sw.appendChild(img);
-        sw.addEventListener("click", () => {
-          draftNbCover = cov.path;
-          coverRow
-            .querySelectorAll(".cover-swatch-btn")
-            .forEach((b) => b.classList.remove("selected"));
-          sw.classList.add("selected");
-        });
-        coverRow.appendChild(sw);
-      }
-      form.appendChild(coverRow);
-    }
-
-    const accentRow = document.createElement("div");
-    accentRow.className = "accent-swatch-row";
-    for (const color of ACCENT_PALETTE) {
-      const dot = document.createElement("button");
-      dot.type = "button";
-      dot.className = `accent-dot-btn${
-        draftNbAccent === color ? " selected" : ""
-      }`;
-      dot.style.background = color;
-      dot.title = color;
-      dot.addEventListener("click", () => {
-        draftNbAccent = color;
-        accentRow
-          .querySelectorAll(".accent-dot-btn")
-          .forEach((b) => b.classList.remove("selected"));
-        dot.classList.add("selected");
-      });
-      accentRow.appendChild(dot);
-    }
-    form.appendChild(accentRow);
-
-    const submitRow = document.createElement("div");
-    submitRow.style.display = "flex";
-    submitRow.style.gap = "0.4rem";
-
-    const createBtn = document.createElement("button");
-    createBtn.type = "submit";
-    createBtn.className = "btn-editorial btn-sage small";
-    createBtn.textContent = draftNbBusy ? "Creating..." : "Create";
-    createBtn.disabled = draftNbBusy;
-
-    const cancelNbBtn = document.createElement("button");
-    cancelNbBtn.type = "button";
-    cancelNbBtn.className = "btn-editorial btn-ghost small";
-    cancelNbBtn.textContent = "Cancel";
-    cancelNbBtn.addEventListener("click", () => {
-      addNotebookOpen = false;
-      draftNbName = "";
-      renderSidebar(container, state, callbacks);
-    });
-
-    submitRow.append(createBtn, cancelNbBtn);
-    form.appendChild(submitRow);
-
-    form.addEventListener("submit", async (ev) => {
-      ev.preventDefault();
-      const trimmed = draftNbName.trim();
-      if (!trimmed || draftNbBusy) return;
-      draftNbBusy = true;
-      createBtn.disabled = true;
-      createBtn.textContent = "Creating...";
-      try {
-        await callbacks.onCreateNotebook?.({
-          name: trimmed,
-          description: null,
-          cover_asset: draftNbCover,
-          accent_color: draftNbAccent,
-        });
+    const form = buildNotebookForm({
+      state,
+      callbacks,
+      initialName: draftNbName,
+      initialCover: draftNbCover || "",
+      initialAccent: draftNbAccent,
+      submitLabel: "Create",
+      busyLabel: "Creating...",
+      isBusy: draftNbBusy,
+      onNameChange: (val) => {
+        draftNbName = val;
+      },
+      onCoverChange: (val) => {
+        draftNbCover = val;
+      },
+      onAccentChange: (val) => {
+        draftNbAccent = val;
+      },
+      onSubmit: async ({ name, cover_asset, accent_color }) => {
+        if (draftNbBusy) return;
+        draftNbBusy = true;
+        try {
+          await callbacks.onCreateNotebook?.({
+            name,
+            description: null,
+            cover_asset: cover_asset || null,
+            accent_color,
+          });
+          addNotebookOpen = false;
+          draftNbName = "";
+        } finally {
+          draftNbBusy = false;
+        }
+      },
+      onCancel: () => {
         addNotebookOpen = false;
         draftNbName = "";
-      } finally {
-        draftNbBusy = false;
-        if (createBtn.isConnected) {
-          createBtn.disabled = false;
-          createBtn.textContent = "Create";
-        }
-      }
+        renderSidebar(container, state, callbacks);
+      },
     });
-
     nbSection.appendChild(form);
   }
 
@@ -302,15 +454,31 @@ export function renderSidebar(container, state, callbacks = {}) {
   nbList.appendChild(allNbBtn);
 
   for (const nb of state.notebooks || []) {
+    const isNbActive = isTimelineView && state.selectedNotebookId === nb.id;
+    const row = document.createElement("div");
+    row.className = `sidebar-notebook-row${isNbActive ? " is-active" : ""}`;
+
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = `sidebar-notebook-item${
-      isTimelineView && state.selectedNotebookId === nb.id ? " is-active" : ""
-    }`;
+    btn.className = `sidebar-notebook-item${isNbActive ? " is-active" : ""}`;
 
-    const dot = document.createElement("span");
-    dot.className = "notebook-color-dot";
-    dot.style.background = nb.accent_color || "var(--accent-primary)";
+    if (nb.cover_asset) {
+      const thumb = document.createElement("span");
+      thumb.className = "notebook-cover-thumb";
+      thumb.style.borderColor = nb.accent_color || "var(--border-strong)";
+      const thumbImg = document.createElement("img");
+      thumbImg.src = resolveVaultUrl(nb.cover_asset);
+      thumbImg.alt = "";
+      thumbImg.loading = "lazy";
+      thumbImg.decoding = "async";
+      thumb.appendChild(thumbImg);
+      btn.appendChild(thumb);
+    } else {
+      const dot = document.createElement("span");
+      dot.className = "notebook-color-dot";
+      dot.style.background = nb.accent_color || "var(--accent-primary)";
+      btn.appendChild(dot);
+    }
 
     const name = document.createElement("span");
     name.className = "notebook-name";
@@ -320,9 +488,182 @@ export function renderSidebar(container, state, callbacks = {}) {
     count.className = "notebook-count";
     count.textContent = String(nb.entry_count ?? 0);
 
-    btn.append(dot, name, count);
+    btn.append(name, count);
     btn.addEventListener("click", () => callbacks.onSelectNotebook?.(nb.id));
-    nbList.appendChild(btn);
+    row.appendChild(btn);
+
+    if (callbacks.onUpdateNotebook || callbacks.onDeleteNotebook) {
+      const rowActions = document.createElement("div");
+      rowActions.className = "sidebar-notebook-actions";
+
+      if (callbacks.onUpdateNotebook) {
+        const editBtn = document.createElement("button");
+        editBtn.type = "button";
+        editBtn.className = "sidebar-row-icon-btn";
+        editBtn.title = "Edit notebook";
+        editBtn.setAttribute("aria-label", `Edit ${nb.name}`);
+        editBtn.appendChild(iconEl("edit", "tiny-icon"));
+        editBtn.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          deletingNotebookId = null;
+          if (editingNotebookId === nb.id) {
+            editingNotebookId = null;
+          } else {
+            addNotebookOpen = false;
+            editingNotebookId = nb.id;
+            editNbName = nb.name || "";
+            editNbCover = nb.cover_asset || "";
+            editNbAccent = nb.accent_color || ACCENT_PALETTE[0];
+          }
+          renderSidebar(container, state, callbacks);
+        });
+        rowActions.appendChild(editBtn);
+      }
+
+      if (callbacks.onDeleteNotebook) {
+        const delBtn = document.createElement("button");
+        delBtn.type = "button";
+        delBtn.className = "sidebar-row-icon-btn is-danger";
+        delBtn.title = "Delete notebook";
+        delBtn.setAttribute("aria-label", `Delete ${nb.name}`);
+        delBtn.appendChild(iconEl("trash", "tiny-icon"));
+        delBtn.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          editingNotebookId = null;
+          if (deletingNotebookId === nb.id) {
+            deletingNotebookId = null;
+          } else {
+            addNotebookOpen = false;
+            deletingNotebookId = nb.id;
+          }
+          renderSidebar(container, state, callbacks);
+        });
+        rowActions.appendChild(delBtn);
+      }
+
+      row.appendChild(rowActions);
+    }
+
+    nbList.appendChild(row);
+
+    if (editingNotebookId === nb.id) {
+      const editForm = buildNotebookForm({
+        state,
+        callbacks,
+        initialName: editNbName,
+        initialCover: editNbCover,
+        initialAccent: editNbAccent,
+        submitLabel: "Save",
+        busyLabel: "Saving...",
+        isBusy: editNbBusy,
+        onNameChange: (val) => {
+          editNbName = val;
+        },
+        onCoverChange: (val) => {
+          editNbCover = val;
+        },
+        onAccentChange: (val) => {
+          editNbAccent = val;
+        },
+        onSubmit: async ({ name, cover_asset, accent_color }) => {
+          if (editNbBusy) return;
+          editNbBusy = true;
+          try {
+            await callbacks.onUpdateNotebook?.({
+              id: nb.id,
+              name,
+              description: nb.description ?? null,
+              cover_asset: cover_asset ?? "",
+              accent_color,
+            });
+            editingNotebookId = null;
+          } finally {
+            editNbBusy = false;
+          }
+        },
+        onCancel: () => {
+          editingNotebookId = null;
+          renderSidebar(container, state, callbacks);
+        },
+      });
+      nbList.appendChild(editForm);
+    }
+
+    if (deletingNotebookId === nb.id) {
+      const delPanel = document.createElement("div");
+      delPanel.className = "inline-notebook-delete";
+
+      const prompt = document.createElement("p");
+      prompt.className = "inline-notebook-delete-prompt";
+      prompt.textContent = `Delete “${nb.name}”?`;
+      delPanel.appendChild(prompt);
+
+      const errEl = document.createElement("p");
+      errEl.className = "form-error";
+      errEl.hidden = true;
+      delPanel.appendChild(errEl);
+
+      const delBtns = document.createElement("div");
+      delBtns.className = "inline-notebook-delete-actions";
+
+      const entryCount = Number(nb.entry_count ?? 0);
+      const runDelete = async (deleteEntries) => {
+        if (deleteNbBusy) return;
+        deleteNbBusy = true;
+        errEl.hidden = true;
+        delPanel.querySelectorAll("button").forEach((b) => {
+          b.disabled = true;
+        });
+        try {
+          await callbacks.onDeleteNotebook?.(nb.id, deleteEntries);
+          deletingNotebookId = null;
+        } catch (err) {
+          errEl.textContent = String(err?.message || err || "Delete failed");
+          errEl.hidden = false;
+          delPanel.querySelectorAll("button").forEach((b) => {
+            b.disabled = false;
+          });
+        } finally {
+          deleteNbBusy = false;
+        }
+      };
+
+      if (entryCount > 0) {
+        const keepBtn = document.createElement("button");
+        keepBtn.type = "button";
+        keepBtn.className = "btn-editorial small";
+        keepBtn.textContent = `Keep ${entryCount} ${entryCount === 1 ? "entry" : "entries"}`;
+        keepBtn.addEventListener("click", () => runDelete(false));
+
+        const wipeBtn = document.createElement("button");
+        wipeBtn.type = "button";
+        wipeBtn.className = "btn-editorial btn-terracotta small";
+        wipeBtn.textContent = `Delete + ${entryCount} ${entryCount === 1 ? "entry" : "entries"}`;
+        wipeBtn.addEventListener("click", () => runDelete(true));
+
+        delBtns.append(keepBtn, wipeBtn);
+      } else {
+        const confirmBtn = document.createElement("button");
+        confirmBtn.type = "button";
+        confirmBtn.className = "btn-editorial btn-terracotta small";
+        confirmBtn.textContent = "Delete";
+        confirmBtn.addEventListener("click", () => runDelete(false));
+        delBtns.appendChild(confirmBtn);
+      }
+
+      const cancelBtn = document.createElement("button");
+      cancelBtn.type = "button";
+      cancelBtn.className = "btn-editorial btn-ghost small";
+      cancelBtn.textContent = "Cancel";
+      cancelBtn.addEventListener("click", () => {
+        deletingNotebookId = null;
+        renderSidebar(container, state, callbacks);
+      });
+      delBtns.appendChild(cancelBtn);
+
+      delPanel.appendChild(delBtns);
+      nbList.appendChild(delPanel);
+    }
   }
 
   nbSection.appendChild(nbList);
