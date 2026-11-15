@@ -4,8 +4,9 @@
 //!
 //! Supports headless CLI administration (`seed-demo`, `import-dayone`, `import-notion`,
 //! `backup`, `restore`) alongside the native GTK/Wayland Tauri v2 desktop window with
-//! `vault://` media streaming and all 23 `#[tauri::command]` IPC handlers.
+//! `vault://` media streaming and all 26 `#[tauri::command]` IPC handlers.
 
+mod audio_rec;
 mod desktop;
 mod media_gen;
 mod seed;
@@ -16,6 +17,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use anyhow::{bail, Context, Result};
+use audio_rec::RecorderManager;
 use chrono::{DateTime, Datelike, Local, NaiveDate, Utc};
 use clap::{Parser, Subcommand};
 use journal_core::Vault;
@@ -41,6 +43,7 @@ static ASSET_MANIFEST_CACHE: OnceLock<AssetManifest> = OnceLock::new();
 
 struct DesktopState {
     vault: Arc<Vault>,
+    recorder: Arc<RecorderManager>,
 }
 
 #[derive(Debug, Parser)]
@@ -906,6 +909,58 @@ async fn upload_audio(
     .await
 }
 
+#[tauri::command(rename_all = "snake_case")]
+async fn start_voice_recording(state: State<'_, DesktopState>) -> Result<String, String> {
+    let recorder = Arc::clone(&state.recorder);
+    tauri::async_runtime::spawn_blocking(move || recorder.start())
+        .await
+        .map_err(|e| format!("Audio recorder task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn stop_voice_recording(state: State<'_, DesktopState>) -> Result<VoiceMemoMeta, String> {
+    let recorder = Arc::clone(&state.recorder);
+    let vault = Arc::clone(&state.vault);
+    tauri::async_runtime::spawn_blocking(move || recorder.stop(&vault))
+        .await
+        .map_err(|e| format!("Audio recorder stop task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn cancel_voice_recording(state: State<'_, DesktopState>) -> Result<(), String> {
+    let recorder = Arc::clone(&state.recorder);
+    tauri::async_runtime::spawn_blocking(move || recorder.cancel())
+        .await
+        .map_err(|e| format!("Audio recorder cancel task failed: {e}"))?
+}
+
+#[cfg(target_os = "linux")]
+fn configure_linux_webview_media(window: &tauri::WebviewWindow) {
+    use webkit2gtk::glib::prelude::*;
+    use webkit2gtk::{
+        PermissionRequestExt, SettingsExt, UserMediaPermissionRequest,
+        UserMediaPermissionRequestExt, WebViewExt,
+    };
+
+    let _ = window.with_webview(|wv| {
+        let webview = wv.inner();
+        if let Some(settings) = webview.settings() {
+            settings.set_enable_media_stream(true);
+            settings.set_enable_mediasource(true);
+            settings.set_enable_webaudio(true);
+        }
+        webview.connect_permission_request(|_wv, req| {
+            if let Some(media_req) = req.downcast_ref::<UserMediaPermissionRequest>() {
+                if media_req.is_for_audio_device() && !media_req.is_for_video_device() {
+                    req.allow();
+                    return true;
+                }
+            }
+            false
+        });
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Headless CLI Execution & Tauri v2 Desktop Entrypoint
 // ---------------------------------------------------------------------------
@@ -1035,6 +1090,7 @@ fn main() {
             let protocol_vault_root = Arc::new(vault.root().to_path_buf());
             let state = DesktopState {
                 vault: Arc::new(vault),
+                recorder: Arc::new(RecorderManager::new()),
             };
 
             tauri::Builder::default()
@@ -1058,6 +1114,10 @@ fn main() {
                             tauri::WebviewWindowBuilder::from_config(app.handle(), window_cfg)?
                                 .build()?;
                         }
+                    }
+                    #[cfg(target_os = "linux")]
+                    if let Some(main_window) = app.get_webview_window("main") {
+                        configure_linux_webview_media(&main_window);
                     }
                     Ok(())
                 })
@@ -1085,6 +1145,9 @@ fn main() {
                     sync_gdrive,
                     upload_photo,
                     upload_audio,
+                    start_voice_recording,
+                    stop_voice_recording,
+                    cancel_voice_recording,
                 ])
                 .build(tauri::generate_context!())
                 .expect("error while building Log desktop application")

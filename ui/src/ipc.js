@@ -306,4 +306,10 @@ export const api = {
           : null,
     });
   },
+
+  startVoiceRecording: () => invokeCmd("start_voice_recording", {}),
+
+  stopVoiceRecording: () => invokeCmd("stop_voice_recording", {}),
+
+  cancelVoiceRecording: () => invokeCmd("cancel_voice_recording", {}),
 };

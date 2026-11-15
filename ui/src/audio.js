@@ -1,4 +1,4 @@
-import { api, resolveVaultUrl } from "./ipc.js";
+import { api, isTauriRuntime, resolveVaultUrl } from "./ipc.js";
 import { icon } from "./icons.js";
 
 export function formatDuration(totalSecs) {
@@ -88,7 +88,11 @@ export function createVoiceRecorder(onRecorded, onCancel) {
   card.className = "voice-recorder-card";
 
   let isRecording = false;
+  let isStarting = false;
   let isUploading = false;
+  let isDestroyed = false;
+  let cancelRequested = false;
+  let recordingMode = null;
   let stream = null;
   let audioCtx = null;
   let sourceNode = null;
@@ -168,6 +172,11 @@ export function createVoiceRecorder(onRecorded, onCancel) {
       recordBtn.textContent = "Saving note...";
       return;
     }
+    if (isStarting) {
+      recordBtn.disabled = true;
+      recordBtn.textContent = "Starting...";
+      return;
+    }
     recordBtn.disabled = false;
     if (isRecording) {
       const dot = document.createElement("span");
@@ -231,14 +240,68 @@ export function createVoiceRecorder(onRecorded, onCancel) {
     }
   };
 
-  const startRecording = async () => {
-    setError("");
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setError("Microphone capture unavailable here. Use Upload audio file instead.");
-      return;
+  const startTimer = () => {
+    if (timerId) {
+      clearInterval(timerId);
     }
+    startTime = Date.now();
+    timerSpan.textContent = "00:00";
+    timerId = setInterval(() => {
+      const elapsed = (Date.now() - startTime) / 1000;
+      timerSpan.textContent = formatDuration(elapsed);
+      if (elapsed >= 1800) {
+        stopAndSave();
+      }
+    }, 200);
+  };
+
+  const cancelActiveRecording = async () => {
+    cancelRequested = true;
+    const mode = recordingMode;
+    isRecording = false;
+    recordingMode = null;
+    chunks = [];
+    await teardownAudio();
+    if (mode === "native") {
+      await api.cancelVoiceRecording().catch(() => {});
+    }
+  };
+
+  const startRecording = async () => {
+    if (isStarting || isRecording || isUploading) return;
+    setError("");
+    cancelRequested = false;
+    isStarting = true;
+    renderRecordButton();
+
     try {
+      if (isTauriRuntime()) {
+        try {
+          await api.startVoiceRecording();
+          if (isDestroyed || cancelRequested) {
+            await api.cancelVoiceRecording().catch(() => {});
+            return;
+          }
+          recordingMode = "native";
+          isRecording = true;
+          startTimer();
+          return;
+        } catch {
+          if (isDestroyed || cancelRequested) return;
+          // Fall through to WebAudio getUserMedia when native capture is unsupported or unavailable.
+        }
+      }
+
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setError("Microphone capture unavailable here. Use Upload audio file instead.");
+        return;
+      }
+
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (isDestroyed || cancelRequested) {
+        await teardownAudio();
+        return;
+      }
       const Ctx = window.AudioContext || window.webkitAudioContext;
       if (!Ctx) {
         throw new Error("WebAudio AudioContext is not supported in this webview.");
@@ -261,29 +324,50 @@ export function createVoiceRecorder(onRecorded, onCancel) {
       processorNode.connect(silenceGain);
       silenceGain.connect(audioCtx.destination);
 
+      recordingMode = "web";
       isRecording = true;
-      startTime = Date.now();
-      timerSpan.textContent = "00:00";
-      timerId = setInterval(() => {
-        const elapsed = (Date.now() - startTime) / 1000;
-        timerSpan.textContent = formatDuration(elapsed);
-        if (elapsed >= 1800) {
-          stopAndSave();
-        }
-      }, 200);
-      renderRecordButton();
+      startTimer();
     } catch (err) {
+      recordingMode = null;
       await teardownAudio();
       isRecording = false;
-      renderRecordButton();
       setError(
         `Microphone unavailable (${err?.message || "permission denied"}). Use Upload audio file.`
       );
+    } finally {
+      isStarting = false;
+      renderRecordButton();
     }
   };
 
   const stopAndSave = async () => {
+    if (!isRecording || isUploading) return;
+    const mode = recordingMode;
     isRecording = false;
+    recordingMode = null;
+
+    if (timerId) {
+      clearInterval(timerId);
+      timerId = null;
+    }
+
+    if (mode === "native") {
+      isUploading = true;
+      renderRecordButton();
+      try {
+        const memo = await api.stopVoiceRecording();
+        if (isDestroyed) return;
+        isUploading = false;
+        renderRecordButton();
+        onRecorded?.(memo);
+      } catch (err) {
+        isUploading = false;
+        renderRecordButton();
+        setError(err?.message || "Failed to save voice note.");
+      }
+      return;
+    }
+
     const elapsedSecs = Math.max(0.2, (Date.now() - startTime) / 1000);
     const captured = flattenChunks(chunks);
     const rate = sampleRate;
@@ -302,6 +386,9 @@ export function createVoiceRecorder(onRecorded, onCancel) {
       const wavBytes = encodeWav16Mono(captured, rate);
       const filename = `voice-memo-${Date.now()}.wav`;
       const memo = await api.uploadAudio(wavBytes, filename, elapsedSecs);
+      if (isDestroyed) return;
+      isUploading = false;
+      renderRecordButton();
       onRecorded?.(memo);
     } catch (err) {
       isUploading = false;
@@ -311,7 +398,7 @@ export function createVoiceRecorder(onRecorded, onCancel) {
   };
 
   recordBtn.addEventListener("click", () => {
-    if (isUploading) return;
+    if (isUploading || isStarting) return;
     if (isRecording) {
       stopAndSave();
     } else {
@@ -324,15 +411,18 @@ export function createVoiceRecorder(onRecorded, onCancel) {
     fileInput.value = "";
     if (!file || isUploading) return;
     setError("");
-    if (isRecording) {
-      isRecording = false;
-      await teardownAudio();
+    if (isRecording || isStarting || recordingMode === "native") {
+      await cancelActiveRecording();
+      renderRecordButton();
     }
     isUploading = true;
     renderRecordButton();
     try {
       const dur = await probeAudioDuration(file);
       const memo = await api.uploadAudio(file, file.name, dur);
+      if (isDestroyed) return;
+      isUploading = false;
+      renderRecordButton();
       onRecorded?.(memo);
     } catch (err) {
       isUploading = false;
@@ -342,15 +432,13 @@ export function createVoiceRecorder(onRecorded, onCancel) {
   });
 
   cancelBtn.addEventListener("click", async () => {
-    isRecording = false;
-    await teardownAudio();
+    await cancelActiveRecording();
     onCancel?.();
   });
 
   card.destroy = async () => {
-    isRecording = false;
-    chunks = [];
-    await teardownAudio();
+    isDestroyed = true;
+    await cancelActiveRecording();
   };
 
   renderRecordButton();

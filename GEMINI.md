@@ -31,7 +31,7 @@ A tactile, local-first personal journal desktop application built completely wit
 - `crates/journal-import`: Importers and migration audit tools (Day One ZIP/JSON, Notion export/MCP snapshots, Markdown folders).
 - `crates/journal-sync`: Client-side `age` archive encryption/decryption and Google Drive / local backup orchestration.
 - `ui`: Zero-framework ES-module Tauri `frontendDist` (`index.html`, `styles/main.css`, `src/*.js`, `assets/`).
-- `src-tauri`: Pure Tauri v2 desktop application & CLI (`log-journal` binary), custom `vault://` media protocol, and 23 typed IPC commands.
+- `src-tauri`: Pure Tauri v2 desktop application & CLI (`log-journal` binary), custom `vault://` media protocol, and 26 typed IPC commands.
 
 ## Build & Environment Rules
 

@@ -2585,12 +2585,14 @@ dependencies = [
  "journal-import",
  "journal-sync",
  "journal-types",
+ "libc",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tokio",
  "uuid",
+ "webkit2gtk",
 ]
 
 [[package]]
