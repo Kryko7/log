@@ -280,16 +280,16 @@ pub fn StampPickerPopover(
 
     view! {
         <Show when=is_open>
-            <div class="stamp-picker-popover" role="dialog" aria-label="Botanical Stamps and Stickers">
+            <div class="stamp-picker-popover" role="dialog" aria-label="Stamps and Stickers">
                 <div class="popover-header">
                     <div class="popover-title-row">
                         <IconStamp class="popover-icon" />
-                        <span class="small-caps-meta">"Herbarium & Postal Stamps"</span>
+                        <span class="small-caps-meta">"Stamps & Stickers"</span>
                     </div>
                     <button
                         type="button"
                         class="icon-btn subtle"
-                        title="Close stamp drawer"
+                        title="Close"
                         on:click=move |_| on_close.run(())
                     >
                         <IconClose />
@@ -332,14 +332,14 @@ pub fn StampPickerPopover(
                 <input
                     type="text"
                     class="editorial-input stamp-label-input"
-                    placeholder="Optional postmark inscription (e.g. SANCTUARY POST)"
+                    placeholder="Optional stamp label"
                     prop:value=move || custom_label.get()
                     on:input=move |ev| custom_label.set(event_target_value(&ev))
                 />
 
                 <div class="stamp-picker-sections">
                     <div class="stamp-picker-group">
-                        <span class="small-caps-meta group-caption">"Pressed Botanical Stickers"</span>
+                        <span class="small-caps-meta group-caption">"Stickers"</span>
                         <div class="stamp-grid">
                             {move || {
                                 let items = manifest.get().stickers;
@@ -370,7 +370,7 @@ pub fn StampPickerPopover(
                     </div>
 
                     <div class="stamp-picker-group">
-                        <span class="small-caps-meta group-caption">"Engraved Ink Postmarks"</span>
+                        <span class="small-caps-meta group-caption">"Postmarks"</span>
                         <div class="stamp-grid">
                             {move || {
                                 let items = manifest.get().stamps;

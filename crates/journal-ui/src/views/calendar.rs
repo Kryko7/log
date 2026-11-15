@@ -1,4 +1,4 @@
-//! 7-column botanical Calendar Mosaic view with Polaroid miniatures and entry pips.
+//! 7-column editorial Calendar view with photo thumbnails and entry indicators.
 
 use std::collections::HashMap;
 
@@ -13,7 +13,7 @@ use crate::views::{days_in_month, first_weekday_sunday0, format_month_year};
 
 const WEEKDAYS: [&str; 7] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
 
-/// Monthly botanical mosaic grid displaying entry counts, Polaroid miniatures, and starred markers.
+/// Monthly editorial calendar grid displaying entry counts, photo previews, and starred markers.
 #[component]
 pub fn CalendarMosaicView(
     year: Signal<i32>,
@@ -46,11 +46,11 @@ pub fn CalendarMosaicView(
     };
 
     view! {
-        <section class="folio-stage calendar-stage" aria-label="Calendar Mosaic">
+        <section class="folio-stage calendar-stage" aria-label="Calendar">
             <header class="stage-header calendar-stage-header">
                 <div>
-                    <span class="small-caps-meta">"Calendar Mosaic"</span>
                     <h1 class="stage-serif-title">{move || format_month_year(year.get(), month.get())}</h1>
+                    <p class="stage-subtitle">"Calendar"</p>
                 </div>
 
                 <div class="calendar-nav-controls">
@@ -162,7 +162,7 @@ pub fn CalendarMosaicView(
 
                                     <div class="calendar-day-bottom">
                                         {mood_label.map(|m_txt| {
-                                            view! { <span class="calendar-mood-pill">{m_txt}</span> }
+                                            view! { <span class="calendar-mood-label">{m_txt}</span> }
                                         })}
 
                                         <div class="calendar-day-indicators">

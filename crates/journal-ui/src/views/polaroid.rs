@@ -1,4 +1,4 @@
-//! Interactive 3D specular-lit Polaroid photograph frame with torn washi strip.
+//! Interactive 3D specular-lit Polaroid photograph frame with optional washi tape and lightbox.
 
 use journal_types::PolaroidMeta;
 use leptos::prelude::*;
@@ -6,7 +6,8 @@ use wasm_bindgen::JsCast;
 
 use crate::icons::{IconClose, IconMapPin};
 
-/// Tactile Polaroid card with 3D pointer tilt, radial specular sheen, washi strip, and serif caption.
+/// Tactile photograph print card with subtle 3D pointer tilt, specular sheen,
+/// optional torn washi strip, and serif caption.
 #[component]
 pub fn PolaroidCard(
     photo: PolaroidMeta,
@@ -37,7 +38,7 @@ pub fn PolaroidCard(
     let location_label = photo.location.as_ref().map(|loc| loc.place_name.clone());
     let photo_id = photo.id.clone();
     let display_fig = figure_number.unwrap_or(index + 1);
-    let figure_label = format!("FIG. {:02}", display_fig);
+    let figure_label = format!("{:02}", display_fig);
     let alt_text = caption
         .clone()
         .unwrap_or_else(|| photo.filename.clone());
@@ -58,8 +59,8 @@ pub fn PolaroidCard(
         let nx = (rel_x - 0.5) * 2.0;
         let ny = (rel_y - 0.5) * 2.0;
         hovered.set(true);
-        tilt_x.set(-ny * 7.5);
-        tilt_y.set(nx * 8.5);
+        tilt_x.set(-ny * 5.0);
+        tilt_y.set(nx * 5.5);
         sheen_x.set(rel_x * 100.0);
         sheen_y.set(rel_y * 100.0);
     };
@@ -86,7 +87,7 @@ pub fn PolaroidCard(
                 style=move || {
                     if hovered.get() {
                         format!(
-                            "transform: perspective(900px) rotateX({:.2}deg) rotateY({:.2}deg) scale3d(1.02, 1.02, 1.02); --sheen-x: {:.1}%; --sheen-y: {:.1}%;",
+                            "transform: perspective(1000px) rotateX({:.2}deg) rotateY({:.2}deg) scale3d(1.01, 1.01, 1.01); --sheen-x: {:.1}%; --sheen-y: {:.1}%;",
                             tilt_x.get(),
                             tilt_y.get(),
                             sheen_x.get(),
@@ -94,7 +95,7 @@ pub fn PolaroidCard(
                         )
                     } else {
                         format!(
-                            "transform: perspective(900px) rotate({:.2}deg); --sheen-x: 50%; --sheen-y: 30%;",
+                            "transform: perspective(1000px) rotate({:.2}deg); --sheen-x: 50%; --sheen-y: 30%;",
                             base_rot
                         )
                     }
@@ -164,7 +165,7 @@ pub fn PolaroidCard(
                             <input
                                 type="text"
                                 class="polaroid-caption-input"
-                                placeholder="Write a Polaroid caption..."
+                                placeholder="Add a caption..."
                                 prop:value=move || caption_draft.get()
                                 on:input=move |ev| caption_draft.set(event_target_value(&ev))
                                 on:blur=move |_| cap_cb.run(caption_draft.get_untracked())

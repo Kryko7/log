@@ -26,6 +26,103 @@ pub enum ActiveView {
     Settings,
 }
 
+/// Removes inline Markdown image tags `![alt](url)` from a string.
+pub fn strip_markdown_images(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(start) = rest.find("![") {
+        out.push_str(&rest[..start]);
+        let after_bang = &rest[start + 2..];
+        if let Some(mid) = after_bang.find("](") {
+            let after_paren = &after_bang[mid + 2..];
+            if let Some(end) = after_paren.find(')') {
+                if !after_bang[..mid].contains('\n') && !after_paren[..end].contains('\n') {
+                    rest = &after_paren[end + 1..];
+                    continue;
+                }
+            }
+        }
+        out.push_str("![");
+        rest = after_bang;
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Cleans an entry excerpt for timeline / memory rows by removing Markdown image
+/// syntax and collapsing whitespace cleanly.
+pub fn clean_excerpt_snippet(raw: &str) -> String {
+    strip_markdown_images(raw)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn normalize_prose_prefix(input: &str) -> String {
+    let without_images = strip_markdown_images(input);
+    let mut cleaned = String::with_capacity(without_images.len());
+    let mut prev_space = true;
+    for line in without_images.lines() {
+        let trimmed = line
+            .trim()
+            .trim_start_matches(|c: char| matches!(c, '#' | '*' | '_' | '>' | '-'));
+        for ch in trimmed.chars() {
+            if ch.is_whitespace() {
+                if !prev_space {
+                    cleaned.push(' ');
+                    prev_space = true;
+                }
+            } else if !matches!(ch, '*' | '_' | '`') {
+                for lc in ch.to_lowercase() {
+                    cleaned.push(lc);
+                }
+                prev_space = false;
+            }
+        }
+        if !prev_space {
+            cleaned.push(' ');
+            prev_space = true;
+        }
+    }
+    cleaned.trim().to_string()
+}
+
+/// Returns `true` when an entry title is blank, a generic placeholder, an image
+/// tag artifact, or was auto-derived by truncating the opening sentence of the
+/// entry body/snippet (as happens in Day One imports without explicit titles).
+pub fn is_auto_derived_title(title: &str, body_or_snippet: &str) -> bool {
+    let raw = title.trim();
+    if raw.is_empty()
+        || raw.eq_ignore_ascii_case("untitled entry")
+        || raw.eq_ignore_ascii_case("untitled folio")
+        || (raw.starts_with("![") && raw.contains("]("))
+    {
+        return true;
+    }
+
+    let stripped_title = raw
+        .trim_end_matches('…')
+        .trim_end_matches("...")
+        .trim();
+    let norm_title = normalize_prose_prefix(stripped_title);
+    if norm_title.chars().count() < 10 {
+        return false;
+    }
+
+    let norm_body = normalize_prose_prefix(body_or_snippet);
+    if norm_body.is_empty() {
+        return false;
+    }
+
+    if norm_body.starts_with(&norm_title) {
+        return true;
+    }
+
+    // Handle cases where Day One truncated mid-word before appending ellipsis.
+    let prefix: String = norm_title.chars().take(24).collect();
+    prefix.chars().count() >= 10 && norm_body.starts_with(&prefix)
+}
+
 /// Format an entry UTC timestamp as a concise editorial date string (e.g. `Nov 15, 2026`).
 pub fn format_entry_date(dt: &DateTime<Utc>) -> String {
     dt.format("%b %d, %Y").to_string()

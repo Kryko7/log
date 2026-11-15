@@ -150,15 +150,15 @@ pub fn MigrationModal(
                     class="editorial-modal-sheet wide"
                     role="dialog"
                     aria-modal="true"
-                    aria-label="Archive Migration Studio"
+                    aria-label="Import Entries"
                     on:click=move |ev| ev.stop_propagation()
                 >
                     <header class="modal-header">
                         <div class="modal-title-group">
                             <IconArchiveImport class="modal-title-icon" />
                             <div>
-                                <span class="small-caps-meta">"Archive Migration Studio"</span>
-                                <h2 class="modal-serif-heading">"Day One & Notion Importer"</h2>
+                                <span class="small-caps-meta">"Import"</span>
+                                <h2 class="modal-serif-heading">"Day One & Notion Import"</h2>
                             </div>
                         </div>
                         <button
@@ -483,15 +483,15 @@ pub fn BackupSyncModal(
                     class="editorial-modal-sheet wide"
                     role="dialog"
                     aria-modal="true"
-                    aria-label="Encrypted Sanctuary Backup"
+                    aria-label="Encrypted Backup"
                     on:click=move |ev| ev.stop_propagation()
                 >
                     <header class="modal-header">
                         <div class="modal-title-group">
                             <IconCloudLock class="modal-title-icon" />
                             <div>
-                                <span class="small-caps-meta">"Zero-Knowledge Sync"</span>
-                                <h2 class="modal-serif-heading">"Encrypted Sanctuary Backup & Drive"</h2>
+                                <span class="small-caps-meta">"Backup"</span>
+                                <h2 class="modal-serif-heading">"Encrypted Backup & Google Drive"</h2>
                             </div>
                         </div>
                         <button

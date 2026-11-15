@@ -1,6 +1,5 @@
-//! Archival "On This Day" memory spread with engraved rotary postmark badges.
+//! "On This Day" archival memories view across prior years.
 
-use chrono::Datelike;
 use journal_types::OnThisDayGroup;
 use leptos::prelude::*;
 use uuid::Uuid;
@@ -8,9 +7,9 @@ use uuid::Uuid;
 use crate::icons::{
     IconClockHistory, IconMapPin, IconMic, IconStar, WeatherGlyph,
 };
-use crate::views::format_entry_date;
+use crate::views::{clean_excerpt_snippet, is_auto_derived_title};
 
-/// Historical memory spread displaying past entries from the same calendar month & day.
+/// Historical memory list displaying past entries from the same calendar month and day.
 #[component]
 pub fn OnThisDayView(
     groups: Signal<Vec<OnThisDayGroup>>,
@@ -19,14 +18,11 @@ pub fn OnThisDayView(
     let today_label = chrono::Utc::now().format("%B %d").to_string();
 
     view! {
-        <section class="folio-stage on-this-day-stage" aria-label="On This Day Memories">
+        <section class="timeline-river" aria-label="On This Day">
             <header class="stage-header">
                 <div>
-                    <span class="small-caps-meta">{format!("Archival Echoes · {today_label}")}</span>
                     <h1 class="stage-serif-title">"On This Day"</h1>
-                </div>
-                <div class="postmark-header-seal" aria-hidden="true">
-                    <img src="/assets/svg/postmark-circle.svg" alt="" />
+                    <p class="stage-subtitle">{today_label}</p>
                 </div>
             </header>
 
@@ -36,9 +32,9 @@ pub fn OnThisDayView(
                     return view! {
                         <div class="editorial-empty-card">
                             <IconClockHistory class="empty-emblem" />
-                            <h2 class="empty-serif-heading">"No Past Echoes for This Date Yet"</h2>
+                            <h2 class="empty-serif-heading">"No past entries on this date"</h2>
                             <p class="empty-prose-note">
-                                "As seasons turn, folios written on this calendar day in prior years will gather here like letters returned to the desk."
+                                "Entries written on this calendar day in previous years will appear here."
                             </p>
                         </div>
                     }
@@ -46,92 +42,108 @@ pub fn OnThisDayView(
                 }
 
                 view! {
-                    <div class="on-this-day-groups">
+                    <div class="timeline-months-list">
                         {list
                             .into_iter()
                             .map(|group| {
-                                let years_badge = if group.years_ago == 1 {
-                                    "1 YEAR AGO".to_string()
+                                let years_label = if group.years_ago == 1 {
+                                    format!("1 year ago · {}", group.year)
                                 } else {
-                                    format!("{} YEARS AGO", group.years_ago)
+                                    format!("{} years ago · {}", group.years_ago, group.year)
                                 };
-                                let year_num = group.year;
+                                let count = group.entries.len();
 
                                 view! {
-                                    <section class="otd-year-section">
-                                        <div class="otd-postmark-row">
-                                            <div class="rotary-postmark-badge">
-                                                <span class="rotary-ring-text">{years_badge}</span>
-                                                <span class="rotary-year-num">{year_num}</span>
-                                            </div>
-                                            <span class="timeline-month-rule"></span>
+                                    <section class="timeline-month-group">
+                                        <div class="timeline-month-divider">
+                                            <span class="timeline-month-heading">{years_label}</span>
+                                            <span class="timeline-month-count small-caps-meta">
+                                                {format!("{count} {}", if count == 1 { "entry" } else { "entries" })}
+                                            </span>
                                         </div>
 
-                                        <div class="otd-cards-grid">
+                                        <div class="timeline-rows">
                                             {group
                                                 .entries
                                                 .into_iter()
                                                 .map(|entry| {
                                                     let entry_id = entry.id;
-                                                    let title = if entry.title.trim().is_empty() {
-                                                        "Untitled Folio".to_string()
-                                                    } else {
-                                                        entry.title.clone()
-                                                    };
-                                                    let date_str = format_entry_date(&entry.date);
-                                                    let day_num = entry.date.day();
+                                                    let snippet = clean_excerpt_snippet(&entry.snippet);
+                                                    let show_title = !is_auto_derived_title(&entry.title, &snippet);
+                                                    let title = entry.title.clone();
+                                                    let day_num = entry.date.format("%d").to_string();
+                                                    let mon_day = entry.date.format("%b · %Y").to_string().to_uppercase();
+                                                    let time_hm = entry.date.format("%H:%M").to_string();
                                                     let cover_photo = entry.cover_photo.clone();
-                                                    let snippet = entry.snippet.clone();
                                                     let location = entry.location.clone();
                                                     let weather = entry.weather.clone();
                                                     let starred = entry.starred;
                                                     let has_audio = entry.has_audio;
+                                                    let read_mins = entry.reading_minutes;
 
                                                     view! {
                                                         <article
-                                                            class="otd-memory-card"
+                                                            class="timeline-entry-row"
                                                             on:click=move |_| on_open_entry.run(entry_id)
                                                         >
-                                                            <div class="otd-card-header">
-                                                                <span class="small-caps-meta">{format!("{date_str} · Day {day_num}")}</span>
-                                                                <div class="otd-card-badges">
-                                                                    {has_audio.then(|| view! { <IconMic class="tiny-icon" /> })}
-                                                                    {starred.then(|| view! { <IconStar filled=true class="tiny-icon" /> })}
-                                                                </div>
+                                                            <div class="timeline-date-col">
+                                                                <span class="timeline-day-num">{day_num}</span>
+                                                                <span class="timeline-day-sub small-caps-meta">{mon_day}</span>
+                                                                <span class="timeline-day-time">{time_hm}</span>
                                                             </div>
 
-                                                            <div class="otd-card-body">
-                                                                <div class="otd-card-prose">
-                                                                    <h3 class="timeline-card-title">{title}</h3>
-                                                                    <div class="timeline-card-meta-row">
-                                                                        {location.map(|loc| {
-                                                                            view! {
-                                                                                <span class="meta-chip">
-                                                                                    <IconMapPin class="tiny-icon" />
-                                                                                    <span>{loc.place_name}</span>
-                                                                                </span>
-                                                                            }
-                                                                        })}
-                                                                        {weather.map(|w| {
-                                                                            view! {
-                                                                                <span class="meta-chip">
-                                                                                    <WeatherGlyph icon_key=w.icon_key class="tiny-icon" />
-                                                                                    <span>{w.condition}</span>
-                                                                                </span>
-                                                                            }
-                                                                        })}
-                                                                    </div>
-                                                                    <p class="timeline-card-excerpt">{snippet}</p>
-                                                                </div>
-
-                                                                {cover_photo.map(|src| {
-                                                                    view! {
-                                                                        <div class="otd-polaroid-inset">
-                                                                            <img src=src alt="Memory Polaroid" loading="lazy" />
-                                                                        </div>
-                                                                    }
+                                                            <div class="timeline-prose-col">
+                                                                {show_title.then(|| {
+                                                                    view! { <h3 class="timeline-row-title">{title}</h3> }
                                                                 })}
+                                                                {(!snippet.is_empty()).then(|| {
+                                                                    view! { <p class="timeline-row-excerpt">{snippet}</p> }
+                                                                })}
+
+                                                                <div class="timeline-row-meta">
+                                                                    {location.map(|loc| {
+                                                                        view! {
+                                                                            <span class="meta-text-item">
+                                                                                <IconMapPin class="tiny-icon" />
+                                                                                <span>{loc.place_name}</span>
+                                                                            </span>
+                                                                        }
+                                                                    })}
+                                                                    {weather.map(|w| {
+                                                                        view! {
+                                                                            <span class="meta-text-item">
+                                                                                <WeatherGlyph icon_key=w.icon_key class="tiny-icon" />
+                                                                                <span>{w.condition}</span>
+                                                                            </span>
+                                                                        }
+                                                                    })}
+                                                                    {(read_mins > 0).then(|| {
+                                                                        view! { <span class="meta-text-item">{format!("{read_mins} min read")}</span> }
+                                                                    })}
+                                                                    {has_audio.then(|| {
+                                                                        view! {
+                                                                            <span class="meta-text-item" title="Voice note">
+                                                                                <IconMic class="tiny-icon" />
+                                                                            </span>
+                                                                        }
+                                                                    })}
+                                                                    {starred.then(|| {
+                                                                        view! {
+                                                                            <span class="meta-star-mark" title="Starred">
+                                                                                <IconStar filled=true class="tiny-icon" />
+                                                                            </span>
+                                                                        }
+                                                                    })}
+                                                                </div>
                                                             </div>
+
+                                                            {cover_photo.map(|src| {
+                                                                view! {
+                                                                    <div class="timeline-photo-thumb">
+                                                                        <img src=src alt="" loading="lazy" />
+                                                                    </div>
+                                                                }
+                                                            })}
                                                         </article>
                                                     }
                                                 })

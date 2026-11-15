@@ -23,7 +23,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::editor::EntrySpreadEditor;
 use crate::gpu_canvas::GpuPaperCanvas;
-use crate::icons::{IconClose, IconSearch, IconStar};
+use crate::icons::{IconChevronRight, IconClose, IconSearch, IconStar};
 use crate::sidebar::{SanctuaryTab, Sidebar};
 use crate::views::{
     BackupSyncModal, CalendarMosaicView, MigrationModal, OnThisDayView, TimelineView,
@@ -146,7 +146,7 @@ fn SearchPaletteModal(
                             node_ref=input_ref
                             type="text"
                             class="search-modal-input"
-                            placeholder="Search folios, tags, places, or ink memories..."
+                            placeholder="Search entries…"
                             prop:value=move || query_text.get()
                             on:input=move |ev| {
                                 let val = event_target_value(&ev);
@@ -180,13 +180,13 @@ fn SearchPaletteModal(
                         {move || {
                             if searching.get() && hits.get().is_empty() {
                                 return view! {
-                                    <div class="muted-empty-note">"Searching local FTS5 index..."</div>
+                                    <div class="muted-empty-note">"Searching…"</div>
                                 }.into_any();
                             }
                             let list = hits.get();
                             if list.is_empty() {
                                 return view! {
-                                    <div class="muted-empty-note">"No matching folios found in the archive."</div>
+                                    <div class="muted-empty-note">"No matching entries found."</div>
                                 }.into_any();
                             }
 
@@ -195,7 +195,7 @@ fn SearchPaletteModal(
                                     let entry_id = hit.summary.id;
                                     let date_label = hit.summary.date.format("%b %d, %Y").to_string();
                                     let title = if hit.summary.title.trim().is_empty() {
-                                        "Untitled Folio".to_string()
+                                        "Untitled Entry".to_string()
                                     } else {
                                         hit.summary.title.clone()
                                     };
@@ -264,6 +264,7 @@ pub fn App() -> impl IntoView {
 
     // Navigation & filters
     let active_tab = RwSignal::new(SanctuaryTab::Spread);
+    let sidebar_collapsed = RwSignal::new(false);
     let selected_notebook = RwSignal::new(Option::<String>::None);
     let selected_tag = RwSignal::new(Option::<String>::None);
     let reset_nonce = RwSignal::new(0_u64);
@@ -347,6 +348,9 @@ pub fn App() -> impl IntoView {
                 if (ev.ctrl_key() || ev.meta_key()) && ev.key().eq_ignore_ascii_case("k") {
                     ev.prevent_default();
                     search_open.update(|v| *v = !*v);
+                } else if (ev.ctrl_key() || ev.meta_key()) && ev.key() == "\\" {
+                    ev.prevent_default();
+                    sidebar_collapsed.update(|v| *v = !*v);
                 } else if ev.key() == "Escape" && search_open.get_untracked() {
                     search_open.set(false);
                 }
@@ -465,7 +469,7 @@ pub fn App() -> impl IntoView {
         <div class="log-root">
             <GpuPaperCanvas night_mode=night_mode.into() />
 
-            <div class="sanctuary-shell">
+            <div class="sanctuary-shell" class:is-sidebar-collapsed=move || sidebar_collapsed.get()>
                 <Sidebar
                     active_tab=active_tab.read_only()
                     on_select_tab=Callback::new(move |tab| active_tab.set(tab))
@@ -487,9 +491,21 @@ pub fn App() -> impl IntoView {
                         notebooks.update(|list| list.push(nb));
                         refresh_vault(false);
                     })
+                    on_toggle_collapse=Callback::new(move |_| sidebar_collapsed.update(|c| *c = !*c))
                 />
 
                 <main class="sanctuary-main">
+                    <Show when=move || sidebar_collapsed.get()>
+                        <button
+                            type="button"
+                            class="sidebar-reopen-btn"
+                            title="Show sidebar (Ctrl+\\)"
+                            aria-label="Show sidebar"
+                            on:click=move |_| sidebar_collapsed.set(false)
+                        >
+                            <IconChevronRight />
+                        </button>
+                    </Show>
                     {move || match active_tab.get() {
                         SanctuaryTab::Spread => view! {
                             <EntrySpreadEditor
