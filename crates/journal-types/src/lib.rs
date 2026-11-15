@@ -36,7 +36,11 @@ pub struct Entry {
 
 impl Entry {
     /// Construct a new entry with computed word count and reading time.
-    pub fn new(frontmatter: EntryFrontmatter, body: impl Into<String>, path: impl Into<String>) -> Self {
+    pub fn new(
+        frontmatter: EntryFrontmatter,
+        body: impl Into<String>,
+        path: impl Into<String>,
+    ) -> Self {
         let body = body.into();
         let word_count = Self::count_words(&body);
         let reading_minutes = Self::estimate_reading_minutes(word_count);

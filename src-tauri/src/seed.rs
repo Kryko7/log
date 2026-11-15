@@ -7,8 +7,7 @@ use anyhow::Result;
 use chrono::{Datelike, Days, NaiveDate, TimeZone, Utc};
 use journal_core::Vault;
 use journal_types::{
-    CreateNotebookRequest, EntryFrontmatter, GeoLocation, PolaroidMeta, StampPlacement,
-    WeatherInfo,
+    CreateNotebookRequest, EntryFrontmatter, GeoLocation, PolaroidMeta, StampPlacement, WeatherInfo,
 };
 use uuid::Uuid;
 
@@ -87,9 +86,8 @@ pub fn seed_demo_vault(vault: &Vault) -> Result<SeedSummary> {
             Some(3.0),
             Some("audio/wav".to_string()),
         )?;
-        voice_memo.transcript = Some(
-            "Three-second veranda chord before the evening downpour settled in.".to_string(),
-        );
+        voice_memo.transcript =
+            Some("Three-second veranda chord before the evening downpour settled in.".to_string());
 
         let dt1 = Utc.from_utc_datetime(&today.and_hms_opt(9, 20, 0).expect("valid time"));
 
@@ -163,7 +161,11 @@ This afternoon's rain echoes the notes I kept in [[First Rain of November]], whe
         fm2.date = dt2;
         fm2.updated_at = dt2;
         fm2.notebook_id = Some("daily".to_string());
-        fm2.tags = vec!["november".to_string(), "monsoon".to_string(), "tea".to_string()];
+        fm2.tags = vec![
+            "november".to_string(),
+            "monsoon".to_string(),
+            "tea".to_string(),
+        ];
         fm2.mood = Some("calm".to_string());
         fm2.weather = Some(WeatherInfo {
             condition: "Showers".to_string(),
@@ -266,8 +268,7 @@ We spoke very little for half an hour. Outside, silver-oak leaves turned slowly 
 
     let title_4 = "Pressed Pteris Fern & Herbarium Notes";
     if !has_title(title_4) {
-        let dt4 =
-            Utc.from_utc_datetime(&herbarium_day.and_hms_opt(11, 5, 0).expect("valid time"));
+        let dt4 = Utc.from_utc_datetime(&herbarium_day.and_hms_opt(11, 5, 0).expect("valid time"));
         let mut fm4 = EntryFrontmatter::new(title_4);
         fm4.id = Uuid::now_v7();
         fm4.date = dt4;

@@ -19,7 +19,7 @@ A tactile, local-first personal journal desktop application built completely wit
 
 ## Storage & Privacy Architecture
 
-- **Vault Location**: Plain UTF-8 Markdown files with YAML frontmatter stored in `~/Personal/JournalVault` (overridable via `LOG_VAULT_DIR` or `--vault <PATH>`). **Never** store user journal data or temporary vaults inside `/home/minindu/Personal/Log`.
+- **Vault Location**: Plain UTF-8 Markdown files with YAML frontmatter stored in `~/Personal/JournalVault` (overridable via `LOG_VAULT_DIR` or `--vault <PATH>`). **Never** store user journal data or temporary vaults inside the source repository.
 - **Search Index**: Rebuildable SQLite FTS5 index derived solely from the vault's Markdown files and sidecar metadata.
 - **Encrypted Sync**: All remote backups (e.g., Google Drive `LogJournal`) are compressed and encrypted client-side using **`age`** before leaving the machine.
 - **Zero Telemetry**: No analytics, tracking beacons, or unencrypted cloud uploads.

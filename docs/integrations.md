@@ -7,7 +7,7 @@
 ## 1. Notion MCP (`notion`)
 
 ### Connection & Tool Configuration
-- **Plugin Location**: `/home/minindu/.gemini/config/plugins/notion/`
+- **Plugin Location**: `~/.gemini/config/plugins/notion/`
 - **MCP Endpoint**: `https://mcp.notion.com/mcp` (OAuth, managed by Antigravity)
 - **Tool Schemas**:
   - `notion-search`: parameters `query` (string, required), `query_type` (`"internal" | "user"`), `data_source_url` (`collection://...`), `page_url`, `filters`, `sort`, `page_size` (1..50, default 10), `max_highlight_length` (0..500).
@@ -16,9 +16,9 @@
 ### Discovered Journal Schema (Read-Only, Anonymized)
 Read-only `notion-search` discovery (board #5) identified two Notion databases:
 
-1. **Primary Journal Database**: `📓 Journal`
-   - **Database ID**: `62ec646f-5e25-4385-bb04-d0139269b0ab`
-   - **Data Source URL**: `collection://866a63c3-6160-4849-ba32-d2a83b07de33`
+1. **Primary Journal Database**: `Journal`
+   - **Database ID**: `00000000-0000-0000-0000-000000000001`
+   - **Data Source URL**: `collection://00000000-0000-0000-0000-000000000002`
    - **Properties Schema & Mapping to `journal-types`**:
 
 | Notion Property | Notion Type | Observed Values / Format | Target `Log` Mapping (`Entry` / `EntryFrontmatter`) |
@@ -32,13 +32,13 @@ Read-only `notion-search` discovery (board #5) identified two Notion databases:
 | `Words` | `number` | integer word count | Migration parity audit (`MigrationAuditItem`) |
 | `Daily Log` | `relation` | Related page IDs | Cross-reference / `links` backlink hint |
 
-2. **Secondary Journal Database**: `🌸 Weekly Notes & Rust Labs Journal`
-   - **Database ID**: `6377ba59-75e1-4d42-b31c-568403cdef9d`
+2. **Secondary Journal Database**: `Secondary Journal`
+   - **Database ID**: `00000000-0000-0000-0000-000000000003`
 
 ### Importer & Delta Deduplication Contract (`crates/journal-import`)
 - Support importing from **both**:
   1. Official Notion Markdown + CSV export folders/ZIPs (parsing CSV metadata alongside `.md` files and mapping `Entry`, `Date`, `Source`, `Starred`, `Photos`, `Words`).
-  2. Read-only Notion MCP / API JSON snapshots matching the `📓 Journal` schema above.
+  2. Read-only Notion MCP / API JSON snapshots matching the `Journal` schema above.
 - **Day One Primary + Notion Delta Rule**:
   - When importing Notion entries after (or alongside) a Day One `.zip` export, if a Notion page has `Source == "Day One"` and an entry already exists on that date in the vault, or if `(YYYY-MM-DD, normalized_title_or_first_paragraph)` matches an existing entry, skip it as `MigrationStatus::SkippedDuplicate`.
   - Import only Notion-unique entries and record full counts and audit items in `MigrationReport`.
@@ -48,8 +48,8 @@ Read-only `notion-search` discovery (board #5) identified two Notion databases:
 ## 2. Google Drive Plugin (`gdrive`)
 
 ### Setup & Authentication
-- **Skill Path**: `/home/minindu/.gemini/config/plugins/gdrive/skills/gdrive/SKILL.md`
-- **Binary**: `/home/minindu/.gemini/config/plugins/gdrive/skills/gdrive/scripts/gdrive` (observed `cl/1015343799`, cached under `~/.gemini/antigravity/plugin_data/gdrive/bin/` and shimmed into `~/.gemini/antigravity/bin/gdrive`).
+- **Skill Path**: `~/.gemini/config/plugins/gdrive/skills/gdrive/SKILL.md`
+- **Binary**: `~/.gemini/config/plugins/gdrive/skills/gdrive/scripts/gdrive` (cached under `~/.gemini/antigravity/plugin_data/gdrive/bin/` and shimmed into `~/.gemini/antigravity/bin/gdrive`).
 - **Auth State**: Antigravity OAuth2 (`provider: google`, scopes `https://www.googleapis.com/auth/drive`, `https://www.googleapis.com/auth/userinfo.email`). Prefix commands with `AGY_ACCOUNT=<account>` when multiple accounts are connected.
 
 ### Read-Only Listing Contract (`gdrive readonly ls --max 0 --json`)
@@ -107,8 +107,8 @@ All remote backups **must** compress (`tar` + `gzip`) and encrypt client-side wi
 ## 3. Google Calendar Plugin (`gcalendar`)
 
 ### Setup & Authentication
-- **Skill Path**: `/home/minindu/.gemini/config/plugins/gcalendar/skills/gcalendar/SKILL.md`
-- **Binary**: `/home/minindu/.gemini/config/plugins/gcalendar/skills/gcalendar/scripts/gcalendar` (observed `cl/986250228`, cached under `~/.gemini/antigravity/plugin_data/gcalendar/bin/`).
+- **Skill Path**: `~/.gemini/config/plugins/gcalendar/skills/gcalendar/SKILL.md`
+- **Binary**: `~/.gemini/config/plugins/gcalendar/skills/gcalendar/scripts/gcalendar` (cached under `~/.gemini/antigravity/plugin_data/gcalendar/bin/`).
 - **Auth State**: Antigravity OAuth2 (`provider: google`, scopes `https://www.googleapis.com/auth/calendar`, `https://www.googleapis.com/auth/userinfo.email`). Prefix with `AGY_ACCOUNT=<account>` when selecting among multiple accounts.
 
 ### Read-Only Daily Events Contract
@@ -152,5 +152,5 @@ Returns a JSON array of Google Calendar v3 event objects (`kind: "calendar#event
   }
 ]
 ```
-- **All-Day Event Fallback**: All-day events populate `start.date` and `end.date` (`YYYY-MM-DD`, exclusive end date) instead of `dateTime`. Parsers in `journal-sync` / `journal-server` must deserialize `start.dateTime.or(start.date)` cleanly.
+- **All-Day Event Fallback**: All-day events populate `start.date` and `end.date` (`YYYY-MM-DD`, exclusive end date) instead of `dateTime`. Parsers in `journal-sync` / `src-tauri` must deserialize `start.dateTime.or(start.date)` cleanly.
 - **Privacy Note**: Calendar events are converted in-memory to ephemeral `CalendarEventPrompt` items (`id`, `title`, `start_time`, `end_time`, `location`, `calendar_name`, `suggested_prompt`) and are **never written to disk** unless the user explicitly clicks a prompt to insert it into a journal entry.

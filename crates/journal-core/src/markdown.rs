@@ -191,7 +191,11 @@ pub fn render_html_preview(markdown: &str) -> String {
             let inner = cap.get(1).map(|m| m.as_str()).unwrap_or("");
             let mut parts = inner.splitn(2, '|');
             let target = parts.next().unwrap_or("").trim();
-            let label = parts.next().map(str::trim).filter(|s| !s.is_empty()).unwrap_or(target);
+            let label = parts
+                .next()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(target);
 
             if target.is_empty() {
                 out.push(Event::Text(full.as_str().to_string().into()));

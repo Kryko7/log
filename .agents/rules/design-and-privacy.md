@@ -32,7 +32,7 @@
 
 ## 3. Storage, Disk & Privacy Guard
 
-- **Vault Path**: Defaults strictly to `~/Personal/JournalVault` (overridable via `LOG_VAULT_DIR` or `--vault <PATH>`). Never create, seed, or commit test vaults inside `/home/minindu/Personal/Log`.
+- **Vault Path**: Defaults strictly to `~/Personal/JournalVault` (overridable via `LOG_VAULT_DIR` or `--vault <PATH>`). Never create, seed, or commit test vaults inside the source repository.
 - **Plaintext Local Ownership**: Entries are stored as plain UTF-8 Markdown files with YAML frontmatter. SQLite FTS5 (`.index/index.sqlite`) is a disposable, rebuildable index derived strictly from vault files.
 - **Client-Side Encryption**: All remote backups (Google Drive `LogJournal` or exported archives) must be tarred, gzipped, and encrypted client-side using `age` (`age::Encryptor` with passphrase or recipient key) before leaving the machine.
 - **Zero Telemetry**: No third-party analytics or tracking beacons.

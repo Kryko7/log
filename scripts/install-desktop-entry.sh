@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # Non-destructive desktop launcher installer for the pure Tauri v2 Log Personal Journal.
-APP_DIR="/home/minindu/Personal/Log"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEST_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 DEST_FILE="$DEST_DIR/log-journal.desktop"
 

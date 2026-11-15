@@ -182,7 +182,8 @@ impl MediaSource {
                 for cand in &candidates {
                     if let Some(&idx) = lookup.get(cand) {
                         if let Ok(mut entry) = archive.by_index(idx) {
-                            let entry_name = entry.name().map(|c| c.into_owned()).unwrap_or_default();
+                            let entry_name =
+                                entry.name().map(|c| c.into_owned()).unwrap_or_default();
                             let filename = Path::new(&entry_name)
                                 .file_name()
                                 .and_then(|s| s.to_str())
@@ -673,10 +674,7 @@ fn register_moment_keys(
 }
 
 /// Rewrite `![alt](dayone-moment://<id>)` and `![alt](dayone-moment://audio/<id>)` into clean vault links.
-pub fn rewrite_dayone_moments(
-    body: &str,
-    moment_urls: &HashMap<String, (String, bool)>,
-) -> String {
+pub fn rewrite_dayone_moments(body: &str, moment_urls: &HashMap<String, (String, bool)>) -> String {
     let re = Regex::new(r"!\[([^\]]*)\]\(dayone-moment://(?:(audio|photo)/)?([^)\s]+)\)")
         .expect("valid moment regex");
 
@@ -712,7 +710,11 @@ fn parse_dayone_timestamp(raw: &str) -> Option<DateTime<Utc>> {
     if let Ok(dt) = DateTime::parse_from_rfc3339(trimmed) {
         return Some(dt.with_timezone(&Utc));
     }
-    for fmt in ["%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"] {
+    for fmt in [
+        "%Y-%m-%dT%H:%M:%SZ",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+    ] {
         if let Ok(naive) = NaiveDateTime::parse_from_str(trimmed, fmt) {
             return Some(Utc.from_utc_datetime(&naive));
         }
@@ -730,16 +732,19 @@ fn map_weather(w: &DayOneWeather) -> Option<WeatherInfo> {
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .or_else(|| w.weather_code.as_deref().map(str::trim).filter(|s| !s.is_empty()))?
+        .or_else(|| {
+            w.weather_code
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        })?
         .to_string();
 
     let icon_key = infer_weather_icon_key(&condition, w.weather_code.as_deref());
-    let humidity_pct = w
-        .relative_humidity
-        .map(|h| {
-            let pct = if h <= 1.0 && h > 0.0 { h * 100.0 } else { h };
-            pct.round().clamp(0.0, 100.0) as u8
-        });
+    let humidity_pct = w.relative_humidity.map(|h| {
+        let pct = if h <= 1.0 && h > 0.0 { h * 100.0 } else { h };
+        pct.round().clamp(0.0, 100.0) as u8
+    });
     let summary = w
         .temperature_celsius
         .map(|t| format!("{condition}, {t:.1}°C"));

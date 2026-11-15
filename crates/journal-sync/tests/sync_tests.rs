@@ -121,7 +121,10 @@ fn age_encrypt_decrypt_restore_round_trip() {
     assert_eq!(restored.entries_restored, 1);
     assert!(restored.media_restored >= 1);
     assert!(restore_dir.join("notebooks.json").is_file());
-    assert!(restore_dir.join("media/photos").join(&photo.filename).is_file());
+    assert!(restore_dir
+        .join("media/photos")
+        .join(&photo.filename)
+        .is_file());
 
     let reopened = Vault::open(&restore_dir).expect("reopen restored vault");
     let loaded = reopened

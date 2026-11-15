@@ -138,8 +138,11 @@ fn markdown_yaml_round_trip_and_wikilinks() {
 
     let body = "First paragraph mentioning [[Autumn Notes|last autumn]] and [[Tea Ledger]].\n\n---\n\n`[[Code Ignored]]`\n\n```\n[[Fenced Ignored]]\n```";
     let serialized = serialize_entry(&fm, body).expect("serialize");
-    let parsed = parse_entry_file(&serialized, "entries/daily/2026/11/2026-11-15-rain-on-the-veranda.md")
-        .expect("parse");
+    let parsed = parse_entry_file(
+        &serialized,
+        "entries/daily/2026/11/2026-11-15-rain-on-the-veranda.md",
+    )
+    .expect("parse");
 
     assert_eq!(parsed.frontmatter, fm);
     assert_eq!(parsed.body, body);
@@ -462,7 +465,9 @@ fn backlinks_calendar_on_this_day_and_stats() {
         .get_calendar_month(today.year(), today.month(), None)
         .unwrap();
     assert!(!cal.is_empty());
-    assert!(cal.iter().any(|d| d.date == today.date_naive() && d.starred_count >= 1));
+    assert!(cal
+        .iter()
+        .any(|d| d.date == today.date_naive() && d.starred_count >= 1));
 
     let stats = vault.get_vault_stats().unwrap();
     assert_eq!(stats.total_entries, 4);
@@ -594,10 +599,7 @@ fn ingest_audio_wav_and_compressed_fallback() {
         .ingest_audio("Rain Porch.wav", &wav_bytes, None, None)
         .expect("ingest wav");
     assert_eq!(wav_meta.peaks.len(), 64);
-    assert!(wav_meta
-        .peaks
-        .iter()
-        .all(|&p| (0.08..=1.0).contains(&p)));
+    assert!(wav_meta.peaks.iter().all(|&p| (0.08..=1.0).contains(&p)));
     assert!((wav_meta.duration_secs - 1.0).abs() < 0.05);
     assert_eq!(wav_meta.mime_type, "audio/wav");
     assert!(wav_meta.url.starts_with("/vault-media/audio/"));
@@ -613,10 +615,7 @@ fn ingest_audio_wav_and_compressed_fallback() {
         .ingest_audio("voice.webm", &fake_webm, Some(9.25), None)
         .expect("ingest webm");
     assert_eq!(webm_meta.peaks.len(), 64);
-    assert!(webm_meta
-        .peaks
-        .iter()
-        .all(|&p| (0.08..=1.0).contains(&p)));
+    assert!(webm_meta.peaks.iter().all(|&p| (0.08..=1.0).contains(&p)));
     assert_eq!(webm_meta.duration_secs, 9.25);
     assert_eq!(webm_meta.mime_type, "audio/webm");
 

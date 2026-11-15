@@ -99,8 +99,12 @@ fn create_dayone_zip_fixture(zip_path: &PathBuf) {
     let opts = SimpleFileOptions::default();
 
     zip.start_file("Journal.json", opts).unwrap();
-    zip.write_all(serde_json::to_string_pretty(&journal_json).unwrap().as_bytes())
-        .unwrap();
+    zip.write_all(
+        serde_json::to_string_pretty(&journal_json)
+            .unwrap()
+            .as_bytes(),
+    )
+    .unwrap();
 
     zip.start_file("photos/abc123photo.png", opts).unwrap();
     zip.write_all(TEST_PNG).unwrap();
@@ -133,18 +137,31 @@ fn dayone_zip_import_rewrites_moments_and_is_idempotent() {
     assert_eq!(report.failed_count, 0);
     assert_eq!(report.media_copied, 2);
 
-    let entry_1 = vault.get_entry("Rain on the Veranda").expect("load entry 1");
+    let entry_1 = vault
+        .get_entry("Rain on the Veranda")
+        .expect("load entry 1");
     assert_eq!(entry_1.frontmatter.source.as_deref(), Some("Day One"));
-    assert_eq!(entry_1.frontmatter.source_id.as_deref(), Some("D1-ENTRY-001"));
+    assert_eq!(
+        entry_1.frontmatter.source_id.as_deref(),
+        Some("D1-ENTRY-001")
+    );
     assert!(entry_1.frontmatter.starred);
     assert_eq!(entry_1.frontmatter.photos.len(), 1);
     assert_eq!(entry_1.frontmatter.audio.len(), 1);
     assert_eq!(
-        entry_1.frontmatter.weather.as_ref().map(|w| w.condition.as_str()),
+        entry_1
+            .frontmatter
+            .weather
+            .as_ref()
+            .map(|w| w.condition.as_str()),
         Some("Light Rain")
     );
     assert_eq!(
-        entry_1.frontmatter.location.as_ref().map(|l| l.place_name.as_str()),
+        entry_1
+            .frontmatter
+            .location
+            .as_ref()
+            .map(|l| l.place_name.as_str()),
         Some("Colombo Study")
     );
     assert!(
@@ -166,7 +183,10 @@ fn dayone_zip_import_rewrites_moments_and_is_idempotent() {
     let entry_2 = vault
         .get_entry("Evening Walk Along Galle Face")
         .expect("load entry 2 from richText");
-    assert_eq!(entry_2.frontmatter.source_id.as_deref(), Some("D1-ENTRY-002"));
+    assert_eq!(
+        entry_2.frontmatter.source_id.as_deref(),
+        Some("D1-ENTRY-002")
+    );
     assert!(entry_2.body.contains("Salt wind and lanterns"));
 
     // Second import of same Day One ZIP must skip both entries idempotently.
@@ -240,7 +260,11 @@ fn overlapping_dayone_and_notion_delta_skips_dayone_duplicates_and_imports_notio
             "body": "Refactored the parser into clean zero-copy slices before dusk."
         }
     ]);
-    fs::write(&notion_json, serde_json::to_string_pretty(&snapshot).unwrap()).unwrap();
+    fs::write(
+        &notion_json,
+        serde_json::to_string_pretty(&snapshot).unwrap(),
+    )
+    .unwrap();
 
     let notion_report = import_notion(
         &vault,

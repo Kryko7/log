@@ -117,9 +117,8 @@ pub fn create_backup(
             tar_builder.append_path_with_name(&item_path, item_name)?;
         } else if item_path.is_dir() {
             for walk_res in WalkDir::new(&item_path).follow_links(false) {
-                let dir_entry = walk_res.map_err(|e| {
-                    SyncError::Io(io::Error::new(io::ErrorKind::Other, e.to_string()))
-                })?;
+                let dir_entry =
+                    walk_res.map_err(|e| SyncError::Io(io::Error::other(e.to_string())))?;
                 let abs_path = dir_entry.path();
                 let rel_path = abs_path.strip_prefix(vault_dir).map_err(|e| {
                     SyncError::Io(io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))

@@ -54,7 +54,8 @@ pub fn ingest_photo(
 
     let exif_data = extract_exif_metadata(bytes);
 
-    let (stem, ext) = split_sanitized_filename(filename, "photo", "jpg", &["jpg", "jpeg", "png", "webp"]);
+    let (stem, ext) =
+        split_sanitized_filename(filename, "photo", "jpg", &["jpg", "jpeg", "png", "webp"]);
     let id = Uuid::now_v7().to_string();
     let saved_name = format!("{id}-{stem}.{ext}");
     let thumb_name = format!("{id}-{stem}.webp");
@@ -251,7 +252,12 @@ fn first_ascii_string(field: &exif::Field) -> Option<String> {
     match &field.value {
         ExifValue::Ascii(items) => items
             .first()
-            .map(|b| String::from_utf8_lossy(b).trim_matches('\0').trim().to_string())
+            .map(|b| {
+                String::from_utf8_lossy(b)
+                    .trim_matches('\0')
+                    .trim()
+                    .to_string()
+            })
             .filter(|s| !s.is_empty()),
         _ => None,
     }

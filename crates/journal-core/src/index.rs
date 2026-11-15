@@ -151,7 +151,10 @@ pub fn upsert_entry(conn: &Connection, entry: &Entry) -> Result<()> {
         )
         .optional()?
     {
-        conn.execute("DELETE FROM entries_fts WHERE rowid = ?1", params![old_rowid])?;
+        conn.execute(
+            "DELETE FROM entries_fts WHERE rowid = ?1",
+            params![old_rowid],
+        )?;
     }
 
     conn.execute(
@@ -215,7 +218,10 @@ pub fn upsert_entry(conn: &Connection, entry: &Entry) -> Result<()> {
         ],
     )?;
 
-    conn.execute("DELETE FROM entry_tags WHERE entry_id = ?1", params![&id_str])?;
+    conn.execute(
+        "DELETE FROM entry_tags WHERE entry_id = ?1",
+        params![&id_str],
+    )?;
     if !entry.frontmatter.tags.is_empty() {
         let mut tag_stmt =
             conn.prepare("INSERT OR IGNORE INTO entry_tags (entry_id, tag) VALUES (?1, ?2)")?;
@@ -227,7 +233,10 @@ pub fn upsert_entry(conn: &Connection, entry: &Entry) -> Result<()> {
         }
     }
 
-    conn.execute("DELETE FROM entry_links WHERE source_id = ?1", params![&id_str])?;
+    conn.execute(
+        "DELETE FROM entry_links WHERE source_id = ?1",
+        params![&id_str],
+    )?;
     let mut all_links = entry.frontmatter.links.clone();
     for extracted in extract_wikilinks(&entry.body) {
         if !all_links
@@ -238,9 +247,8 @@ pub fn upsert_entry(conn: &Connection, entry: &Entry) -> Result<()> {
         }
     }
     if !all_links.is_empty() {
-        let mut link_stmt = conn.prepare(
-            "INSERT OR IGNORE INTO entry_links (source_id, target_ref) VALUES (?1, ?2)",
-        )?;
+        let mut link_stmt = conn
+            .prepare("INSERT OR IGNORE INTO entry_links (source_id, target_ref) VALUES (?1, ?2)")?;
         for target in all_links {
             let trimmed = target.trim();
             if !trimmed.is_empty() {
@@ -268,7 +276,10 @@ pub fn delete_entry_from_index(conn: &Connection, id: Uuid) -> Result<Option<Str
     };
 
     conn.execute("DELETE FROM entries_fts WHERE rowid = ?1", params![rowid])?;
-    conn.execute("DELETE FROM entry_tags WHERE entry_id = ?1", params![&id_str])?;
+    conn.execute(
+        "DELETE FROM entry_tags WHERE entry_id = ?1",
+        params![&id_str],
+    )?;
     conn.execute(
         "DELETE FROM entry_links WHERE source_id = ?1",
         params![&id_str],
@@ -339,7 +350,10 @@ pub fn list_entries(
 }
 
 /// Lookup an entry's vault-relative path by UUID, slug, or title.
-pub fn resolve_entry_path(conn: &Connection, id_or_slug_or_title: &str) -> Result<Option<(Uuid, String)>> {
+pub fn resolve_entry_path(
+    conn: &Connection,
+    id_or_slug_or_title: &str,
+) -> Result<Option<(Uuid, String)>> {
     let needle = id_or_slug_or_title.trim();
     if needle.is_empty() {
         return Ok(None);
@@ -382,12 +396,26 @@ pub fn resolve_entry_path(conn: &Connection, id_or_slug_or_title: &str) -> Resul
     }
 }
 
+/// Existing entry metadata `(path, date, notebook_id, source, source_id)` tuple.
+pub type ExistingEntryMeta = (
+    String,
+    DateTime<Utc>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+type RawEntryMetaRow = (
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
 /// Lookup existing entry metadata `(path, date, notebook_id, source, source_id)` by UUID.
-pub fn find_existing_entry_meta(
-    conn: &Connection,
-    id: Uuid,
-) -> Result<Option<(String, DateTime<Utc>, Option<String>, Option<String>, Option<String>)>> {
-    let row: Option<(String, String, Option<String>, Option<String>, Option<String>)> = conn
+pub fn find_existing_entry_meta(conn: &Connection, id: Uuid) -> Result<Option<ExistingEntryMeta>> {
+    let row: Option<RawEntryMetaRow> = conn
         .query_row(
             "SELECT path, date, notebook_id, source, source_id FROM entries WHERE id = ?1",
             params![id.to_string()],
@@ -427,10 +455,7 @@ pub fn find_by_source_id(
 
 /// Execute full-text FTS5 + structured metadata search.
 pub fn search_entries(conn: &Connection, query: &SearchQuery) -> Result<Vec<SearchHit>> {
-    let fts_expr = query
-        .text
-        .as_deref()
-        .and_then(build_fts5_query);
+    let fts_expr = query.text.as_deref().and_then(build_fts5_query);
 
     let mut sql = if fts_expr.is_some() {
         String::from(
@@ -460,7 +485,11 @@ pub fn search_entries(conn: &Connection, query: &SearchQuery) -> Result<Vec<Sear
         bind.push(Value::Text(expr));
     }
 
-    if let Some(nb) = query.notebook_id.as_deref().filter(|s| !s.trim().is_empty()) {
+    if let Some(nb) = query
+        .notebook_id
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+    {
         sql.push_str(" AND e.notebook_id = ?");
         bind.push(Value::Text(nb.to_string()));
     }
@@ -629,7 +658,11 @@ pub fn get_calendar_month(
             }
         }
         if let Some(m) = mood.filter(|s| !s.trim().is_empty()) {
-            if !summary.moods.iter().any(|existing| existing.eq_ignore_ascii_case(&m)) {
+            if !summary
+                .moods
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(&m))
+            {
                 summary.moods.push(m);
             }
         }
@@ -657,11 +690,14 @@ pub fn get_on_this_day(
          ORDER BY year DESC, date DESC",
     )?;
 
-    let rows = stmt.query_map(params![month as i64, day as i64, current_year as i64], |row| {
-        let summary = row_to_entry_summary(row)?;
-        let year: i32 = row.get(18)?;
-        Ok((year, summary))
-    })?;
+    let rows = stmt.query_map(
+        params![month as i64, day as i64, current_year as i64],
+        |row| {
+            let summary = row_to_entry_summary(row)?;
+            let year: i32 = row.get(18)?;
+            Ok((year, summary))
+        },
+    )?;
 
     let mut groups: BTreeMap<i32, Vec<EntrySummary>> = BTreeMap::new();
     for r in rows {
@@ -815,14 +851,10 @@ fn compute_streaks(dates: &BTreeSet<NaiveDate>, today: NaiveDate) -> (u32, u32) 
     // Active streak counts backwards from today if written today, else from yesterday.
     let anchor = if dates.contains(&today) {
         Some(today)
-    } else if let Some(yesterday) = today.pred_opt() {
-        if dates.contains(&yesterday) {
-            Some(yesterday)
-        } else {
-            None
-        }
     } else {
-        None
+        today
+            .pred_opt()
+            .filter(|&yesterday| dates.contains(&yesterday))
     };
 
     let current = match anchor {

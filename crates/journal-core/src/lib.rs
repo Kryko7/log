@@ -11,7 +11,9 @@ pub mod vault;
 use std::path::PathBuf;
 
 pub use error::{Result, VaultError};
-pub use markdown::{extract_wikilinks, parse_entry_file, render_html_preview, serialize_entry, slugify};
+pub use markdown::{
+    extract_wikilinks, parse_entry_file, render_html_preview, serialize_entry, slugify,
+};
 pub use vault::{Vault, VaultWatcher};
 
 /// Resolve the default journal vault path (`~/Personal/JournalVault`),

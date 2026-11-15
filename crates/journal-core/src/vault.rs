@@ -147,12 +147,11 @@ impl Vault {
     where
         F: Fn(Event) + Send + 'static,
     {
-        let mut watcher =
-            notify::recommended_watcher(move |res: notify::Result<Event>| {
-                if let Ok(event) = res {
-                    on_change(event);
-                }
-            })?;
+        let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
+            if let Ok(event) = res {
+                on_change(event);
+            }
+        })?;
 
         let entries_dir = self.root.join("entries");
         if entries_dir.exists() {
@@ -332,11 +331,8 @@ impl Vault {
             index::find_existing_entry_meta(&conn, frontmatter.id)?.map(|m| m.0)
         };
 
-        let rel_path = self.allocate_entry_rel_path(
-            &notebook_id,
-            &frontmatter,
-            old_path.as_deref(),
-        );
+        let rel_path =
+            self.allocate_entry_rel_path(&notebook_id, &frontmatter, old_path.as_deref());
         let abs_path = self.root.join(&rel_path);
 
         let serialized = serialize_entry(&frontmatter, body)?;
@@ -360,11 +356,7 @@ impl Vault {
     }
 
     /// Look up an entry by external `(source, source_id)` pair for idempotent imports.
-    pub fn find_by_source_id(
-        &self,
-        source: &str,
-        source_id: &str,
-    ) -> Result<Option<EntrySummary>> {
+    pub fn find_by_source_id(&self, source: &str, source_id: &str) -> Result<Option<EntrySummary>> {
         let conn = self.conn.lock().map_err(|_| VaultError::LockPoisoned)?;
         index::find_by_source_id(&conn, source, source_id)
     }
@@ -508,7 +500,8 @@ impl Vault {
         let ymd = d.format("%Y-%m-%d").to_string();
         let base_slug = slugify(&frontmatter.title);
 
-        let mut candidate_rel = format!("entries/{notebook_id}/{year}/{month}/{ymd}-{base_slug}.md");
+        let mut candidate_rel =
+            format!("entries/{notebook_id}/{year}/{month}/{ymd}-{base_slug}.md");
         if old_rel_path == Some(candidate_rel.as_str()) {
             return candidate_rel;
         }
@@ -559,9 +552,7 @@ fn ensure_notebooks_file(root: &Path) -> Result<Vec<Notebook>> {
     let default_nb = Notebook {
         id: DEFAULT_NOTEBOOK_ID.to_string(),
         name: DEFAULT_NOTEBOOK_NAME.to_string(),
-        description: Some(
-            "Daily reflections, quiet moments, and ink on cream paper.".to_string(),
-        ),
+        description: Some("Daily reflections, quiet moments, and ink on cream paper.".to_string()),
         cover_asset: DEFAULT_NOTEBOOK_COVER.to_string(),
         accent_color: DEFAULT_NOTEBOOK_ACCENT.to_string(),
         created_at: Utc::now(),

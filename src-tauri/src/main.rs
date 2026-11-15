@@ -155,15 +155,12 @@ fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
         .map(|(_, data)| data)
         .unwrap_or_else(|| input.trim());
 
-    let cleaned: Vec<u8> = raw
-        .bytes()
-        .filter(|b| !b.is_ascii_whitespace())
-        .collect();
+    let cleaned: Vec<u8> = raw.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
 
     if cleaned.is_empty() {
         return Ok(Vec::new());
     }
-    if cleaned.len() % 4 != 0 {
+    if !cleaned.len().is_multiple_of(4) {
         return Err("Invalid base64 payload length".to_string());
     }
 
@@ -301,11 +298,7 @@ fn build_vault_protocol_response(
     let mime = infer_mime_type(&target);
     let total = bytes.len();
 
-    if let Some(range_hdr) = request
-        .headers()
-        .get("range")
-        .and_then(|v| v.to_str().ok())
-    {
+    if let Some(range_hdr) = request.headers().get("range").and_then(|v| v.to_str().ok()) {
         if let Some(spec) = range_hdr.strip_prefix("bytes=") {
             if let Some((start_s, end_s)) = spec.split_once('-') {
                 if let Ok(start) = start_s.trim().parse::<usize>() {
@@ -634,7 +627,7 @@ fn restore_backup(
     )
     .map_err(err_str)?;
     if resp.restored {
-        if PathBuf::from(&resp.target_vault_dir) == state.vault.root() {
+        if Path::new(&resp.target_vault_dir) == state.vault.root() {
             let _ = state.vault.rebuild_index();
         } else if let Ok(restored_vault) = Vault::open(&resp.target_vault_dir) {
             let _ = restored_vault.rebuild_index();

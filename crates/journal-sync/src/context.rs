@@ -344,8 +344,15 @@ fn convert_raw_events(
     prompts
 }
 
-fn extract_event_date_and_time(dt: &RawEventDateTime) -> (Option<NaiveDate>, Option<String>, Option<u32>) {
-    if let Some(raw_dt) = dt.date_time.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+fn extract_event_date_and_time(
+    dt: &RawEventDateTime,
+) -> (Option<NaiveDate>, Option<String>, Option<u32>) {
+    if let Some(raw_dt) = dt
+        .date_time
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         if let Ok(parsed) = DateTime::parse_from_rfc3339(raw_dt) {
             let local_naive = parsed.naive_local();
             return (

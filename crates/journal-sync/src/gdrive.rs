@@ -193,7 +193,9 @@ async fn upload_via_rest(
         .part("file", media_part);
 
     let resp = client
-        .post(format!("{GDRIVE_UPLOAD_API}?uploadType=multipart&fields=id,name"))
+        .post(format!(
+            "{GDRIVE_UPLOAD_API}?uploadType=multipart&fields=id,name"
+        ))
         .bearer_auth(bearer_token)
         .multipart(form)
         .send()

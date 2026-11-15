@@ -27,12 +27,14 @@ pub fn starter_templates() -> Vec<Template> {
         Template {
             id: "evening-reflection".to_string(),
             name: "Evening Reflection".to_string(),
-            description: "Unwind the day's thread with quiet honesty before turning down the lamp.".to_string(),
+            description: "Unwind the day's thread with quiet honesty before turning down the lamp."
+                .to_string(),
             category: "Daily".to_string(),
             default_tags: vec!["evening".to_string(), "reflection".to_string()],
             default_mood: Some("reflective".to_string()),
             prompts: vec![
-                "What small sensory detail from today deserves to be remembered a year from now?".to_string(),
+                "What small sensory detail from today deserves to be remembered a year from now?"
+                    .to_string(),
                 "Where did your attention linger, and what felt unfinished?".to_string(),
                 "What can you gently set down before sleep?".to_string(),
             ],
@@ -52,7 +54,9 @@ pub fn starter_templates() -> Vec<Template> {
         Template {
             id: "morning-pages".to_string(),
             name: "Morning Pages".to_string(),
-            description: "Unfiltered first-light prose to clear the mental desk before the day begins.".to_string(),
+            description:
+                "Unfiltered first-light prose to clear the mental desk before the day begins."
+                    .to_string(),
             category: "Daily".to_string(),
             default_tags: vec!["morning".to_string(), "pages".to_string()],
             default_mood: Some("calm".to_string()),
@@ -77,7 +81,9 @@ pub fn starter_templates() -> Vec<Template> {
         Template {
             id: "field-travel-notes".to_string(),
             name: "Field & Travel Notes".to_string(),
-            description: "Dispatch-style observations of place, weather, overheard fragments, and routes.".to_string(),
+            description:
+                "Dispatch-style observations of place, weather, overheard fragments, and routes."
+                    .to_string(),
             category: "Travel".to_string(),
             default_tags: vec!["field-notes".to_string(), "travel".to_string()],
             default_mood: Some("curious".to_string()),
@@ -102,7 +108,9 @@ pub fn starter_templates() -> Vec<Template> {
         Template {
             id: "quiet-gratitude".to_string(),
             name: "Quiet Gratitude".to_string(),
-            description: "Three unhurried anchors of appreciation, ordinary kindness, and stillness.".to_string(),
+            description:
+                "Three unhurried anchors of appreciation, ordinary kindness, and stillness."
+                    .to_string(),
             category: "Mindfulness".to_string(),
             default_tags: vec!["gratitude".to_string(), "quiet".to_string()],
             default_mood: Some("grateful".to_string()),
@@ -214,8 +222,14 @@ pub fn load_templates(templates_dir: &Path) -> Result<Vec<Template>> {
         "quiet-gratitude",
     ];
     templates.sort_by(|a, b| {
-        let pos_a = order.iter().position(|id| *id == a.id).unwrap_or(usize::MAX);
-        let pos_b = order.iter().position(|id| *id == b.id).unwrap_or(usize::MAX);
+        let pos_a = order
+            .iter()
+            .position(|id| *id == a.id)
+            .unwrap_or(usize::MAX);
+        let pos_b = order
+            .iter()
+            .position(|id| *id == b.id)
+            .unwrap_or(usize::MAX);
         pos_a.cmp(&pos_b).then_with(|| a.name.cmp(&b.name))
     });
 

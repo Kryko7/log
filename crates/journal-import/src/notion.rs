@@ -59,7 +59,11 @@ enum NotionAssetStore {
 }
 
 impl NotionAssetStore {
-    fn read_relative(&mut self, base_dir: Option<&str>, rel_ref: &str) -> Option<(String, Vec<u8>)> {
+    fn read_relative(
+        &mut self,
+        base_dir: Option<&str>,
+        rel_ref: &str,
+    ) -> Option<(String, Vec<u8>)> {
         let decoded = percent_decode(rel_ref.trim());
         if decoded.starts_with("http://")
             || decoded.starts_with("https://")
@@ -71,7 +75,11 @@ impl NotionAssetStore {
 
         let mut candidates = Vec::new();
         if let Some(base) = base_dir.filter(|b| !b.is_empty()) {
-            candidates.push(format!("{}/{}", base.trim_end_matches('/'), decoded.trim_start_matches("./")));
+            candidates.push(format!(
+                "{}/{}",
+                base.trim_end_matches('/'),
+                decoded.trim_start_matches("./")
+            ));
         }
         candidates.push(decoded.trim_start_matches("./").to_string());
         if let Some(fname) = Path::new(&decoded).file_name().and_then(|s| s.to_str()) {
@@ -244,8 +252,13 @@ fn process_notion_entry(
     }
 
     // 3. Ingest relative Markdown images if present in zip/dir
-    let (rewritten_body, photos, media_copied) =
-        ingest_notion_images(vault, req.dry_run, assets, entry.base_dir_in_source.as_deref(), &entry.body);
+    let (rewritten_body, photos, media_copied) = ingest_notion_images(
+        vault,
+        req.dry_run,
+        assets,
+        entry.base_dir_in_source.as_deref(),
+        &entry.body,
+    );
 
     dedup.insert(Some(&entry.source_id), entry_date, &title, &rewritten_body);
 
@@ -359,7 +372,10 @@ fn load_notion_entries(path: &Path) -> Result<(Vec<ParsedNotionEntry>, NotionAss
     }
     if ext == "md" || ext == "markdown" {
         let raw = fs::read_to_string(path)?;
-        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("note.md");
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("note.md");
         let parsed = parse_notion_markdown(name, "", &raw, &HashMap::new());
         let parent = path.parent().unwrap_or_else(|| Path::new("."));
         return Ok((
@@ -631,8 +647,11 @@ fn parse_notion_json_item(idx: usize, item: &Value) -> Option<ParsedNotionEntry>
         return None;
     }
 
-    let date_raw = extract_date_str(obj, &["date:Date:start", "Date", "date", "created_time", "Created"])
-        .or_else(|| props.and_then(|p| extract_notion_prop_date(p, &["Date", "Created"])));
+    let date_raw = extract_date_str(
+        obj,
+        &["date:Date:start", "Date", "date", "created_time", "Created"],
+    )
+    .or_else(|| props.and_then(|p| extract_notion_prop_date(p, &["Date", "Created"])));
     let date = date_raw
         .as_deref()
         .and_then(parse_flexible_date)
@@ -652,8 +671,12 @@ fn parse_notion_json_item(idx: usize, item: &Value) -> Option<ParsedNotionEntry>
         }
     }
 
-    let source_id = extract_str(obj, &["source_id", "id", "page_id", "url"])
-        .unwrap_or_else(|| format!("notion-json-{idx}-{}", normalize_text(&title).replace(' ', "-")));
+    let source_id = extract_str(obj, &["source_id", "id", "page_id", "url"]).unwrap_or_else(|| {
+        format!(
+            "notion-json-{idx}-{}",
+            normalize_text(&title).replace(' ', "-")
+        )
+    });
 
     let final_title = if title.trim().is_empty() {
         derive_title_from_body(&body, date.date_naive())
@@ -752,7 +775,10 @@ fn extract_tags(obj: &serde_json::Map<String, Value>, keys: &[&str]) -> Vec<Stri
     Vec::new()
 }
 
-fn extract_notion_prop_text(props: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
+fn extract_notion_prop_text(
+    props: &serde_json::Map<String, Value>,
+    keys: &[&str],
+) -> Option<String> {
     for k in keys {
         if let Some(prop) = props.get(*k) {
             if let Some(arr) = prop.get("title").or_else(|| prop.get("rich_text")) {
@@ -770,9 +796,11 @@ fn join_rich_text_array(val: &Value) -> Option<String> {
     let joined: String = arr
         .iter()
         .filter_map(|t| {
-            t.get("plain_text")
-                .and_then(|v| v.as_str())
-                .or_else(|| t.get("text").and_then(|x| x.get("content")).and_then(|v| v.as_str()))
+            t.get("plain_text").and_then(|v| v.as_str()).or_else(|| {
+                t.get("text")
+                    .and_then(|x| x.get("content"))
+                    .and_then(|v| v.as_str())
+            })
         })
         .collect();
     let trimmed = joined.trim();
@@ -783,7 +811,10 @@ fn join_rich_text_array(val: &Value) -> Option<String> {
     }
 }
 
-fn extract_notion_prop_date(props: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
+fn extract_notion_prop_date(
+    props: &serde_json::Map<String, Value>,
+    keys: &[&str],
+) -> Option<String> {
     for k in keys {
         if let Some(prop) = props.get(*k) {
             if let Some(start) = prop
@@ -798,7 +829,10 @@ fn extract_notion_prop_date(props: &serde_json::Map<String, Value>, keys: &[&str
     None
 }
 
-fn extract_notion_prop_select(props: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
+fn extract_notion_prop_select(
+    props: &serde_json::Map<String, Value>,
+    keys: &[&str],
+) -> Option<String> {
     for k in keys {
         if let Some(prop) = props.get(*k) {
             if let Some(name) = prop
@@ -813,7 +847,10 @@ fn extract_notion_prop_select(props: &serde_json::Map<String, Value>, keys: &[&s
     None
 }
 
-fn extract_notion_prop_checkbox(props: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<bool> {
+fn extract_notion_prop_checkbox(
+    props: &serde_json::Map<String, Value>,
+    keys: &[&str],
+) -> Option<bool> {
     for k in keys {
         if let Some(prop) = props.get(*k) {
             if let Some(b) = prop.get("checkbox").and_then(|v| v.as_bool()) {
@@ -868,7 +905,15 @@ fn parse_notion_markdown(
                 break;
             }
             if let Some((k, v)) = line.split_once(':') {
-                apply_notion_header_kv(k, v, &mut title, &mut date, &mut notion_source, &mut starred, &mut tags);
+                apply_notion_header_kv(
+                    k,
+                    v,
+                    &mut title,
+                    &mut date,
+                    &mut notion_source,
+                    &mut starred,
+                    &mut tags,
+                );
             }
         }
         body_lines.extend(lines);
@@ -900,7 +945,14 @@ fn parse_notion_markdown(
                 let key_lower = k.trim().to_ascii_lowercase();
                 if matches!(
                     key_lower.as_str(),
-                    "date" | "day" | "source" | "starred" | "tags" | "photos" | "words" | "daily log"
+                    "date"
+                        | "day"
+                        | "source"
+                        | "starred"
+                        | "tags"
+                        | "photos"
+                        | "words"
+                        | "daily log"
                 ) {
                     apply_notion_header_kv(
                         k,
