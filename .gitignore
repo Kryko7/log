@@ -1,0 +1,22 @@
+# Build artifacts
+/target/
+/log-journal
+crates/journal-ui/dist/
+dist/
+**/*.rs.bk
+
+# OS & editor junk
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Local user data & temporary vaults (NEVER commit personal journal files)
+vault/
+JournalVault/
+*.age
+*.sqlite
+*.db
+*.db-shm
+*.db-wal
+.env

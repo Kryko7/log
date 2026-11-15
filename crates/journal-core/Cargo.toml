@@ -1,0 +1,25 @@
+[package]
+name = "journal-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Vault filesystem storage, Markdown/YAML frontmatter, SQLite FTS5 index, and media handling"
+
+[dependencies]
+journal-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+dirs.workspace = true
+walkdir.workspace = true
+regex.workspace = true
+rusqlite.workspace = true
+pulldown-cmark.workspace = true
+notify.workspace = true
+image.workspace = true
+kamadak-exif.workspace = true
+hound.workspace = true

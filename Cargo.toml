@@ -1,0 +1,77 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/journal-types",
+    "crates/journal-core",
+    "crates/journal-import",
+    "crates/journal-sync",
+    "crates/journal-ui",
+    "crates/journal-server",
+]
+exclude = ["src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Log Authors"]
+
+[workspace.dependencies]
+journal-types = { path = "crates/journal-types" }
+journal-core = { path = "crates/journal-core" }
+journal-import = { path = "crates/journal-import" }
+journal-sync = { path = "crates/journal-sync" }
+journal-ui = { path = "crates/journal-ui" }
+
+# Serialization & Core
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.11", features = ["v4", "v7", "serde", "js"] }
+thiserror = "2.0"
+anyhow = "1.0"
+dirs = "6.0"
+walkdir = "2.5"
+regex = "1.11"
+
+# Async, HTTP & Server
+tokio = { version = "1.43", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
+axum = { version = "0.8", features = ["multipart"] }
+tower-http = { version = "0.6", features = ["fs", "cors"] }
+clap = { version = "4.5", features = ["derive"] }
+
+# Storage, Markdown & Media
+rusqlite = { version = "0.40", features = ["bundled"] }
+pulldown-cmark = "0.13"
+notify = "8.2"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+kamadak-exif = "0.6"
+hound = "3.5"
+
+# Import, Archives & Encryption
+zip = { version = "9.0", default-features = false, features = ["deflate"] }
+tar = "0.4"
+flate2 = "1.1"
+age = { version = "0.11", features = ["armor"] }
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+
+# Frontend (Leptos CSR + WASM + WebGPU)
+leptos = { version = "0.7", features = ["csr"] }
+wasm-bindgen = "0.2.130"
+wasm-bindgen-futures = "0.4"
+web-sys = "0.3"
+js-sys = "0.3"
+gloo-net = "0.6"
+gloo-timers = { version = "0.3", features = ["futures"] }
+console_error_panic_hook = "0.1"
+getrandom = { version = "0.2", features = ["js"] }
+wgpu = { version = "24.0", default-features = false, features = ["webgl", "wgsl"] }
+
+[profile.dev]
+debug = 0
+strip = "debuginfo"
+incremental = false

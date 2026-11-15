@@ -1,0 +1,70 @@
+:root {
+  /* Day Cream Paper Palette */
+  --paper-cream: #FBF7F0;
+  --paper-margin: #F3ECE0;
+  --ink-walnut: #26201D;
+  --ink-umber: #6D6157;
+  --accent-sage: #546E5A;
+  --accent-terracotta: #B5563E;
+
+  /* Active Theme Tokens (Day default) */
+  --bg-desk: #EDE5D7;
+  --bg-page: var(--paper-cream);
+  --bg-margin: var(--paper-margin);
+  --fg-ink: var(--ink-walnut);
+  --fg-muted: var(--ink-umber);
+  --accent-primary: var(--accent-sage);
+  --accent-stamp: var(--accent-terracotta);
+  --spine-shadow: rgba(38, 32, 29, 0.14);
+  --page-border: rgba(109, 97, 87, 0.18);
+
+  /* Typography */
+  --font-serif: "Cormorant Garamond", "Newsreader", Georgia, "Times New Roman", serif;
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --measure-prose: 64ch;
+  --leading-prose: 1.78;
+}
+
+html[data-theme="night"] {
+  --bg-desk: #110F0F;
+  --bg-page: #161414;
+  --bg-margin: #1F1C1C;
+  --fg-ink: #EBE2D5;
+  --fg-muted: #A99E92;
+  --accent-primary: #D99B52;
+  --accent-stamp: #C96A50;
+  --spine-shadow: rgba(0, 0, 0, 0.55);
+  --page-border: rgba(235, 226, 213, 0.12);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  background-color: var(--bg-desk);
+  color: var(--fg-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+.small-caps-meta {
+  font-variant-caps: all-small-caps;
+  letter-spacing: 0.12em;
+  color: var(--fg-muted);
+}
+
+.prose-folio {
+  font-family: var(--font-serif);
+  font-size: 1.18rem;
+  line-height: var(--leading-prose);
+  max-width: var(--measure-prose);
+  color: var(--fg-ink);
+}

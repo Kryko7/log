@@ -1,0 +1,26 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Log",
+  "version": "0.1.0",
+  "identifier": "dev.logjournal.app",
+  "build": {
+    "beforeDevCommand": "trunk serve",
+    "devUrl": "http://localhost:8080",
+    "beforeBuildCommand": "trunk build --release",
+    "frontendDist": "../crates/journal-ui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Log — Personal Journal",
+        "width": 1280,
+        "height": 840,
+        "minWidth": 900,
+        "minHeight": 640
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: data: blob:; media-src 'self' asset: blob:; style-src 'self' 'unsafe-inline'"
+    }
+  }
+}
