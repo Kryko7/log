@@ -101,7 +101,13 @@ enum Commands {
         target: PathBuf,
         #[arg(long, value_name = "ENV")]
         passphrase_env: String,
-        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        #[arg(
+            long,
+            default_value_t = true,
+            num_args = 0..=1,
+            default_missing_value = "true",
+            action = clap::ArgAction::Set
+        )]
         overwrite: bool,
     },
     /// Install the binary, hicolor icons, and Freedesktop `.desktop` launcher entry.
@@ -1217,5 +1223,33 @@ mod tests {
             desktop::format_desktop_exec(Path::new("/tmp/my app/100%/log-journal")),
             "\"/tmp/my app/100%%/log-journal\""
         );
+    }
+
+    #[test]
+    fn restore_overwrite_accepts_flag_and_explicit_bool_values() {
+        let parse_overwrite = |extra: &[&str]| -> bool {
+            let mut args = vec![
+                "log-journal",
+                "restore",
+                "--file",
+                "a.age",
+                "--target",
+                "out",
+                "--passphrase-env",
+                "PASS",
+            ];
+            args.extend_from_slice(extra);
+            let cli = Cli::try_parse_from(args).expect("cli parse");
+            match cli.command {
+                Some(Commands::Restore { overwrite, .. }) => overwrite,
+                other => panic!("unexpected command: {other:?}"),
+            }
+        };
+
+        assert!(parse_overwrite(&[]));
+        assert!(parse_overwrite(&["--overwrite"]));
+        assert!(!parse_overwrite(&["--overwrite", "false"]));
+        assert!(!parse_overwrite(&["--overwrite=false"]));
+        assert!(parse_overwrite(&["--overwrite", "true"]));
     }
 }
