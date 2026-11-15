@@ -7,7 +7,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use chrono::Utc;
-use journal_types::{BackupConfig, BackupInfo, SyncResult};
+use journal_types::{BackupConfig, SyncResult};
 use reqwest::multipart::{Form, Part};
 use serde::Deserialize;
 
@@ -42,19 +42,28 @@ pub async fn sync_gdrive(
     passphrase_opt: Option<&str>,
     config: &BackupConfig,
 ) -> Result<SyncResult> {
-    let mut backup = match passphrase_opt.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(passphrase) => create_backup(vault_dir, passphrase, config)?,
+    let vault_dir_owned = vault_dir.to_path_buf();
+    let passphrase_owned = passphrase_opt
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let config_owned = config.clone();
+
+    let mut backup = tokio::task::spawn_blocking(move || match passphrase_owned {
+        Some(passphrase) => create_backup(&vault_dir_owned, &passphrase, &config_owned),
         None => {
-            let mut existing = list_backups(vault_dir)?;
+            let mut existing = list_backups(&vault_dir_owned)?;
             if existing.is_empty() {
                 return Err(SyncError::InvalidInput(
                     "No encrypted backup exists yet; provide a passphrase to create one."
                         .to_string(),
                 ));
             }
-            existing.remove(0)
+            Ok(existing.remove(0))
         }
-    };
+    })
+    .await
+    .map_err(|e| SyncError::Io(std::io::Error::other(format!("backup task failed: {e}"))))??;
 
     // Enforce client-side encryption invariant before any remote transfer.
     if !backup.encrypted || !backup.filename.ends_with(".age") {
@@ -82,7 +91,12 @@ pub async fn sync_gdrive(
                 Ok(remote_id) => {
                     backup.location = "gdrive".to_string();
                     backup.remote_id = Some(remote_id.clone());
-                    let _ = update_backup_sidecar(vault_dir, &backup);
+                    let sidecar_vault = vault_dir.to_path_buf();
+                    let sidecar_backup = backup.clone();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        update_backup_sidecar(&sidecar_vault, &sidecar_backup)
+                    })
+                    .await;
                     return Ok(SyncResult {
                         success: true,
                         backup: Some(backup.clone()),
@@ -119,7 +133,12 @@ pub async fn sync_gdrive(
             Ok(remote_id_opt) => {
                 backup.location = "gdrive".to_string();
                 backup.remote_id = remote_id_opt;
-                let _ = update_backup_sidecar(vault_dir, &backup);
+                let sidecar_vault = vault_dir.to_path_buf();
+                let sidecar_backup = backup.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    update_backup_sidecar(&sidecar_vault, &sidecar_backup)
+                })
+                .await;
                 return Ok(SyncResult {
                     success: true,
                     backup: Some(backup.clone()),
@@ -158,58 +177,180 @@ pub async fn sync_gdrive(
     })
 }
 
+const MULTIPART_UPLOAD_THRESHOLD_BYTES: u64 = 8 * 1024 * 1024;
+const RESUMABLE_CHUNK_BYTES: usize = 4 * 1024 * 1024;
+const CLI_QUERY_TIMEOUT: Duration = Duration::from_secs(20);
+const CLI_UPLOAD_TIMEOUT: Duration = Duration::from_secs(120);
+
+fn shared_gdrive_client() -> std::result::Result<&'static reqwest::Client, String> {
+    static CLIENT: std::sync::OnceLock<std::result::Result<reqwest::Client, String>> =
+        std::sync::OnceLock::new();
+    let res = CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(60))
+            .build()
+            .map_err(|e| e.to_string())
+    });
+    match res {
+        Ok(client) => Ok(client),
+        Err(err) => Err(err.clone()),
+    }
+}
+
 async fn upload_via_rest(
     bearer_token: &str,
     folder_name: &str,
     archive_path: &Path,
     filename: &str,
 ) -> std::result::Result<String, String> {
-    let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = shared_gdrive_client()?;
 
-    let folder_id = ensure_drive_folder(&client, bearer_token, folder_name).await?;
-    let bytes = tokio::fs::read(archive_path)
+    let folder_id = ensure_drive_folder(client, bearer_token, folder_name).await?;
+    let total_len = tokio::fs::metadata(archive_path)
         .await
-        .map_err(|e| format!("failed to read archive: {e}"))?;
+        .map_err(|e| format!("failed to stat archive: {e}"))?
+        .len();
 
-    let metadata = serde_json::json!({
-        "name": filename,
-        "parents": [folder_id],
-    });
+    if total_len <= MULTIPART_UPLOAD_THRESHOLD_BYTES {
+        let bytes = tokio::fs::read(archive_path)
+            .await
+            .map_err(|e| format!("failed to read archive: {e}"))?;
 
-    let metadata_part = Part::text(metadata.to_string())
-        .mime_str("application/json; charset=UTF-8")
-        .map_err(|e| e.to_string())?;
-    let media_part = Part::bytes(bytes)
-        .file_name(filename.to_string())
-        .mime_str("application/octet-stream")
-        .map_err(|e| e.to_string())?;
+        let metadata = serde_json::json!({
+            "name": filename,
+            "parents": [folder_id],
+        });
 
-    let form = Form::new()
-        .part("metadata", metadata_part)
-        .part("file", media_part);
+        let metadata_part = Part::text(metadata.to_string())
+            .mime_str("application/json; charset=UTF-8")
+            .map_err(|e| e.to_string())?;
+        let media_part = Part::bytes(bytes)
+            .file_name(filename.to_string())
+            .mime_str("application/octet-stream")
+            .map_err(|e| e.to_string())?;
 
-    let resp = client
+        let form = Form::new()
+            .part("metadata", metadata_part)
+            .part("file", media_part);
+
+        let resp = client
+            .post(format!(
+                "{GDRIVE_UPLOAD_API}?uploadType=multipart&fields=id,name"
+            ))
+            .bearer_auth(bearer_token)
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("HTTP {status}: {body}"));
+        }
+
+        let uploaded: DriveFileEntry = resp.json().await.map_err(|e| e.to_string())?;
+        return Ok(uploaded.id);
+    }
+
+    upload_via_resumable(
+        client,
+        bearer_token,
+        &folder_id,
+        archive_path,
+        filename,
+        total_len,
+    )
+    .await
+}
+
+async fn upload_via_resumable(
+    client: &reqwest::Client,
+    bearer_token: &str,
+    folder_id: &str,
+    archive_path: &Path,
+    filename: &str,
+    total_len: u64,
+) -> std::result::Result<String, String> {
+    use tokio::io::AsyncReadExt;
+
+    let init_resp = client
         .post(format!(
-            "{GDRIVE_UPLOAD_API}?uploadType=multipart&fields=id,name"
+            "{GDRIVE_UPLOAD_API}?uploadType=resumable&fields=id,name"
         ))
         .bearer_auth(bearer_token)
-        .multipart(form)
+        .header("X-Upload-Content-Type", "application/octet-stream")
+        .header("X-Upload-Content-Length", total_len.to_string())
+        .json(&serde_json::json!({
+            "name": filename,
+            "parents": [folder_id],
+        }))
         .send()
         .await
         .map_err(|e| e.to_string())?;
 
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("HTTP {status}: {body}"));
+    if !init_resp.status().is_success() {
+        let status = init_resp.status();
+        let body = init_resp.text().await.unwrap_or_default();
+        return Err(format!("Drive resumable init HTTP {status}: {body}"));
     }
 
-    let uploaded: DriveFileEntry = resp.json().await.map_err(|e| e.to_string())?;
-    Ok(uploaded.id)
+    let session_uri = init_resp
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+        .ok_or_else(|| "Drive resumable init missing Location header".to_string())?;
+
+    let mut file = tokio::fs::File::open(archive_path)
+        .await
+        .map_err(|e| format!("failed to open archive: {e}"))?;
+    let mut offset: u64 = 0;
+
+    loop {
+        let mut buf = vec![0u8; RESUMABLE_CHUNK_BYTES];
+        let mut filled = 0usize;
+        while filled < buf.len() {
+            let n = file
+                .read(&mut buf[filled..])
+                .await
+                .map_err(|e| format!("failed to read archive chunk: {e}"))?;
+            if n == 0 {
+                break;
+            }
+            filled += n;
+        }
+        if filled == 0 {
+            return Err("Drive resumable upload ended before server returned file id".to_string());
+        }
+        buf.truncate(filled);
+
+        let end = offset + (filled as u64) - 1;
+        let content_range = format!("bytes {offset}-{end}/{total_len}");
+        let chunk_resp = client
+            .put(&session_uri)
+            .header("Content-Type", "application/octet-stream")
+            .header("Content-Length", filled.to_string())
+            .header("Content-Range", content_range)
+            .body(buf)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let status = chunk_resp.status();
+        if status.as_u16() == 308 {
+            offset = end + 1;
+            continue;
+        }
+        if !status.is_success() {
+            let body = chunk_resp.text().await.unwrap_or_default();
+            return Err(format!("Drive resumable chunk HTTP {status}: {body}"));
+        }
+
+        let uploaded: DriveFileEntry = chunk_resp.json().await.map_err(|e| e.to_string())?;
+        return Ok(uploaded.id);
+    }
 }
 
 async fn ensure_drive_folder(
@@ -217,7 +358,7 @@ async fn ensure_drive_folder(
     bearer_token: &str,
     folder_name: &str,
 ) -> std::result::Result<String, String> {
-    let escaped = folder_name.replace('\'', "\\'");
+    let escaped = folder_name.replace('\\', "\\\\").replace('\'', "\\'");
     let q = format!(
         "name = '{escaped}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
     );
@@ -267,14 +408,29 @@ async fn ensure_drive_folder(
     Ok(created.id)
 }
 
+async fn run_cli_with_timeout(
+    cli: &str,
+    args: &[&str],
+    timeout_dur: Duration,
+    action: &str,
+) -> std::result::Result<std::process::Output, String> {
+    let mut cmd = tokio::process::Command::new(cli);
+    cmd.args(args).stdin(Stdio::null());
+    tokio::time::timeout(timeout_dur, cmd.output())
+        .await
+        .map_err(|_| format!("{cli} {action} timed out after {}s", timeout_dur.as_secs()))?
+        .map_err(|e| format!("failed to run {cli} {action}: {e}"))
+}
+
 async fn upload_via_cli(
     folder_name: &str,
     archive_path: &Path,
 ) -> std::result::Result<Option<String>, String> {
     let cli = std::env::var("LOG_GDRIVE_CLI").unwrap_or_else(|_| "gdrive".to_string());
 
-    let search_out = tokio::process::Command::new(&cli)
-        .args([
+    let search_out = run_cli_with_timeout(
+        &cli,
+        &[
             "readonly",
             "search",
             "--name-exact",
@@ -282,11 +438,11 @@ async fn upload_via_cli(
             "--type",
             "folder",
             "--json",
-        ])
-        .stdin(Stdio::null())
-        .output()
-        .await
-        .map_err(|e| format!("failed to run {cli}: {e}"))?;
+        ],
+        CLI_QUERY_TIMEOUT,
+        "search",
+    )
+    .await?;
 
     if !search_out.status.success() {
         let err = String::from_utf8_lossy(&search_out.stderr);
@@ -295,12 +451,13 @@ async fn upload_via_cli(
 
     let folder_id = parse_cli_first_id(&search_out.stdout).unwrap_or_default();
     let folder_id = if folder_id.is_empty() {
-        let mkdir_out = tokio::process::Command::new(&cli)
-            .args(["mutate", "mkdir", folder_name, "--json"])
-            .stdin(Stdio::null())
-            .output()
-            .await
-            .map_err(|e| format!("failed to run {cli} mkdir: {e}"))?;
+        let mkdir_out = run_cli_with_timeout(
+            &cli,
+            &["mutate", "mkdir", folder_name, "--json"],
+            CLI_QUERY_TIMEOUT,
+            "mkdir",
+        )
+        .await?;
         if !mkdir_out.status.success() {
             let err = String::from_utf8_lossy(&mkdir_out.stderr);
             return Err(format!("{cli} mkdir failed: {}", err.trim()));
@@ -312,8 +469,9 @@ async fn upload_via_cli(
     };
 
     let archive_str = archive_path.to_string_lossy().into_owned();
-    let upload_out = tokio::process::Command::new(&cli)
-        .args([
+    let upload_out = run_cli_with_timeout(
+        &cli,
+        &[
             "mutate",
             "upload",
             &archive_str,
@@ -322,11 +480,11 @@ async fn upload_via_cli(
             "--mime-type",
             "application/octet-stream",
             "--json",
-        ])
-        .stdin(Stdio::null())
-        .output()
-        .await
-        .map_err(|e| format!("failed to run {cli} upload: {e}"))?;
+        ],
+        CLI_UPLOAD_TIMEOUT,
+        "upload",
+    )
+    .await?;
 
     if !upload_out.status.success() {
         let err = String::from_utf8_lossy(&upload_out.stderr);
@@ -357,7 +515,3 @@ fn parse_cli_first_id(bytes: &[u8]) -> Option<String> {
     }
     None
 }
-
-/// Unused helper import guard if BackupInfo is referenced by callers.
-#[allow(dead_code)]
-fn _check_backup_type(_: &BackupInfo) {}

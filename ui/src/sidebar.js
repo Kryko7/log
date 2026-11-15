@@ -188,6 +188,7 @@ export function renderSidebar(container, state, callbacks = {}) {
         const img = document.createElement("img");
         img.src = cov.path;
         img.alt = cov.label || "Cover";
+        img.decoding = "async";
         sw.appendChild(img);
         sw.addEventListener("click", () => {
           draftNbCover = cov.path;
@@ -263,6 +264,10 @@ export function renderSidebar(container, state, callbacks = {}) {
         draftNbName = "";
       } finally {
         draftNbBusy = false;
+        if (createBtn.isConnected) {
+          createBtn.disabled = false;
+          createBtn.textContent = "Create";
+        }
       }
     });
 

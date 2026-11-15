@@ -101,21 +101,46 @@ impl Entry {
 
     /// Create a plain-text excerpt truncated cleanly at word boundaries.
     pub fn build_snippet(markdown: &str, max_chars: usize) -> String {
-        let compact: String = markdown
+        if max_chars == 0 {
+            return String::new();
+        }
+        let mut out = String::with_capacity(max_chars.min(256));
+        let mut char_count = 0usize;
+        let mut truncated = false;
+
+        'outer: for line in markdown
             .lines()
             .map(str::trim)
             .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let cleaned = compact.replace(['*', '_', '`'], "");
-        if cleaned.chars().count() <= max_chars {
-            return cleaned;
+        {
+            if !out.is_empty() {
+                if char_count >= max_chars {
+                    truncated = true;
+                    break;
+                }
+                out.push(' ');
+                char_count += 1;
+            }
+            for ch in line.chars().filter(|&c| c != '*' && c != '_' && c != '`') {
+                if char_count >= max_chars {
+                    truncated = true;
+                    break 'outer;
+                }
+                out.push(ch);
+                char_count += 1;
+            }
         }
-        let mut out: String = cleaned.chars().take(max_chars).collect();
+
+        if !truncated {
+            return out;
+        }
         if let Some(last_space) = out.rfind(' ') {
-            out.truncate(last_space);
+            if last_space > 0 {
+                out.truncate(last_space);
+            }
         }
-        format!("{out}…")
+        out.push('…');
+        out
     }
 }
 

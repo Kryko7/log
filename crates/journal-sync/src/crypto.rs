@@ -104,7 +104,7 @@ pub fn create_backup(
     let age_writer = encryptor
         .wrap_output(hashing_writer)
         .map_err(|e| SyncError::Crypto(format!("Failed to initialize age encryptor: {e}")))?;
-    let gz_encoder = GzEncoder::new(age_writer, Compression::default());
+    let gz_encoder = GzEncoder::new(age_writer, Compression::fast());
     let mut tar_builder = tar::Builder::new(gz_encoder);
 
     let mut entry_count = 0usize;
@@ -119,6 +119,9 @@ pub fn create_backup(
             for walk_res in WalkDir::new(&item_path).follow_links(false) {
                 let dir_entry =
                     walk_res.map_err(|e| SyncError::Io(io::Error::other(e.to_string())))?;
+                if dir_entry.file_type().is_symlink() {
+                    continue;
+                }
                 let abs_path = dir_entry.path();
                 let rel_path = abs_path.strip_prefix(vault_dir).map_err(|e| {
                     SyncError::Io(io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))
@@ -266,9 +269,23 @@ pub fn restore_backup(
         if rel_path.as_os_str().is_empty() {
             continue;
         }
+        if !is_allowed_restore_path(&rel_path) {
+            return Err(SyncError::Crypto(format!(
+                "Refusing unexpected archive path outside vault scope: {}",
+                rel_path.display()
+            )));
+        }
 
-        let dest_path = target_dir.join(&rel_path);
         let entry_type = tar_entry.header().entry_type();
+        if entry_type.is_symlink() || entry_type.is_hard_link() {
+            return Err(SyncError::Crypto(format!(
+                "Refusing link entry in archive: {}",
+                rel_path.display()
+            )));
+        }
+
+        ensure_no_symlink_components(&target_dir, &rel_path)?;
+        let dest_path = target_dir.join(&rel_path);
 
         if entry_type.is_dir() {
             fs::create_dir_all(&dest_path)?;
@@ -310,7 +327,53 @@ pub fn restore_backup(
     })
 }
 
+fn is_allowed_restore_path(rel_path: &Path) -> bool {
+    let mut comps = rel_path.components();
+    match comps.next() {
+        Some(std::path::Component::Normal(first)) => {
+            let name = first.to_string_lossy();
+            if name == "notebooks.json" {
+                comps.next().is_none()
+            } else {
+                matches!(name.as_ref(), "entries" | "media" | "templates")
+            }
+        }
+        _ => false,
+    }
+}
+
+fn ensure_no_symlink_components(target_dir: &Path, rel_path: &Path) -> Result<()> {
+    let mut cur = target_dir.to_path_buf();
+    for comp in rel_path.components() {
+        if let std::path::Component::Normal(part) = comp {
+            cur.push(part);
+            match fs::symlink_metadata(&cur) {
+                Ok(meta) if meta.file_type().is_symlink() => {
+                    return Err(SyncError::Crypto(format!(
+                        "Refusing restore through symlinked path: {}",
+                        cur.display()
+                    )));
+                }
+                Ok(_) => {}
+                Err(err) if err.kind() == io::ErrorKind::NotFound => break,
+                Err(err) => return Err(SyncError::Io(err)),
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn update_backup_sidecar(vault_dir: &Path, info: &BackupInfo) -> Result<()> {
+    let mut comps = Path::new(&info.filename).components();
+    let is_plain_filename = matches!(comps.next(), Some(std::path::Component::Normal(_)))
+        && comps.next().is_none()
+        && !info.filename.is_empty();
+    if !is_plain_filename {
+        return Err(SyncError::Crypto(format!(
+            "Invalid backup filename: {}",
+            info.filename
+        )));
+    }
     let archive_path = vault_dir.join("backups").join(&info.filename);
     if archive_path.exists() {
         write_sidecars(&archive_path, info)?;

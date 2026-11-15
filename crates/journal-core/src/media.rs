@@ -1,12 +1,11 @@
-use std::fs;
-use std::io::Cursor;
+use std::fs::{self, File};
+use std::io::{Cursor, Write};
 use std::path::Path;
 
 use chrono::{DateTime, FixedOffset, NaiveDateTime, TimeZone, Utc};
 use exif::{In, Reader as ExifReader, Tag, Value as ExifValue};
 use hound::{SampleFormat, WavReader};
-use image::imageops::FilterType;
-use image::{DynamicImage, GenericImageView, ImageFormat};
+use image::{DynamicImage, GenericImageView, ImageFormat, ImageReader, Limits};
 use journal_types::{GeoLocation, PolaroidMeta, VoiceMemoMeta};
 use uuid::Uuid;
 
@@ -17,7 +16,7 @@ const THUMB_MAX_DIM: u32 = 520;
 const WAVEFORM_PEAKS: usize = 64;
 const MIN_PEAK: f32 = 0.08;
 
-/// Atomically write bytes to `target` by writing a sibling temp file and renaming.
+/// Atomically write bytes to `target` by syncing a sibling temp file and renaming.
 pub(crate) fn write_bytes_atomic(target: &Path, bytes: &[u8]) -> Result<()> {
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
@@ -31,9 +30,17 @@ pub(crate) fn write_bytes_atomic(target: &Path, bytes: &[u8]) -> Result<()> {
         Uuid::now_v7()
     );
     let tmp_path = target.with_file_name(tmp_name);
-    fs::write(&tmp_path, bytes)?;
-    fs::rename(&tmp_path, target)?;
-    Ok(())
+    let write_result = (|| -> Result<()> {
+        let mut file = File::create(&tmp_path)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        fs::rename(&tmp_path, target)?;
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&tmp_path);
+    }
+    write_result
 }
 
 /// Ingest a photograph into `media/photos/`, extract EXIF metadata, and generate a 520px thumbnail.
@@ -49,10 +56,21 @@ pub fn ingest_photo(
         ));
     }
 
-    let decoded = image::load_from_memory(bytes)?;
-    let (width, height) = decoded.dimensions();
+    let mut reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(16_384);
+    limits.max_image_height = Some(16_384);
+    limits.max_alloc = Some(256 * 1024 * 1024);
+    reader.limits(limits);
+    let decoded = reader.decode()?;
+    let (raw_w, raw_h) = decoded.dimensions();
 
     let exif_data = extract_exif_metadata(bytes);
+    let (width, height) = if matches!(exif_data.orientation, Some(5..=8)) {
+        (raw_h, raw_w)
+    } else {
+        (raw_w, raw_h)
+    };
 
     let (stem, ext) =
         split_sanitized_filename(filename, "photo", "jpg", &["jpg", "jpeg", "png", "webp"]);
@@ -143,30 +161,16 @@ pub fn ingest_audio(
 fn make_thumbnail(img: DynamicImage, max_dim: u32) -> DynamicImage {
     let (w, h) = img.dimensions();
     if w > max_dim || h > max_dim {
-        img.resize(max_dim, max_dim, FilterType::Lanczos3)
+        img.thumbnail(max_dim, max_dim)
     } else {
         img
     }
 }
 
 fn save_thumbnail_atomic(img: &DynamicImage, target: &Path) -> Result<()> {
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let tmp_name = format!(
-        ".{}.tmp-{}",
-        target
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("thumb"),
-        Uuid::now_v7()
-    );
-    let tmp_path = target.with_file_name(tmp_name);
     let mut buf = Cursor::new(Vec::new());
     img.write_to(&mut buf, ImageFormat::WebP)?;
-    fs::write(&tmp_path, buf.into_inner())?;
-    fs::rename(&tmp_path, target)?;
-    Ok(())
+    write_bytes_atomic(target, &buf.into_inner())
 }
 
 fn apply_exif_orientation(img: DynamicImage, orientation: Option<u32>) -> DynamicImage {
@@ -331,8 +335,25 @@ fn decode_wav_waveform(bytes: &[u8]) -> Result<(Vec<f32>, f32)> {
     let spec = reader.spec();
     let channels = spec.channels.max(1) as usize;
     let sample_rate = spec.sample_rate.max(1) as f32;
+    let header_frames = reader.duration() as usize;
 
-    let mut mono = Vec::new();
+    if header_frames == 0 {
+        return Ok((vec![MIN_PEAK; WAVEFORM_PEAKS], 0.0));
+    }
+
+    let mut bin_sum_sq = [0.0_f64; WAVEFORM_PEAKS];
+    let mut bin_counts = [0_usize; WAVEFORM_PEAKS];
+    let mut frame_idx = 0usize;
+
+    let mut push_frame = |sample: f32| {
+        let bin = ((frame_idx as u128 * WAVEFORM_PEAKS as u128) / header_frames.max(1) as u128)
+            .min((WAVEFORM_PEAKS - 1) as u128) as usize;
+        let s = sample as f64;
+        bin_sum_sq[bin] += s * s;
+        bin_counts[bin] += 1;
+        frame_idx += 1;
+    };
+
     match spec.sample_format {
         SampleFormat::Int => {
             let bits = spec.bits_per_sample.clamp(1, 32);
@@ -340,54 +361,48 @@ fn decode_wav_waveform(bytes: &[u8]) -> Result<(Vec<f32>, f32)> {
             let mut acc = 0.0_f32;
             let mut ch_idx = 0usize;
             for sample in reader.into_samples::<i32>() {
-                let val = sample? as f32 / scale;
-                acc += val;
+                acc += sample? as f32 / scale;
                 ch_idx += 1;
                 if ch_idx == channels {
-                    mono.push(acc / channels as f32);
+                    push_frame(acc / channels as f32);
                     acc = 0.0;
                     ch_idx = 0;
                 }
             }
             if ch_idx > 0 {
-                mono.push(acc / ch_idx as f32);
+                push_frame(acc / ch_idx as f32);
             }
         }
         SampleFormat::Float => {
             let mut acc = 0.0_f32;
             let mut ch_idx = 0usize;
             for sample in reader.into_samples::<f32>() {
-                let val = sample?;
-                acc += val;
+                acc += sample?;
                 ch_idx += 1;
                 if ch_idx == channels {
-                    mono.push(acc / channels as f32);
+                    push_frame(acc / channels as f32);
                     acc = 0.0;
                     ch_idx = 0;
                 }
             }
             if ch_idx > 0 {
-                mono.push(acc / ch_idx as f32);
+                push_frame(acc / ch_idx as f32);
             }
         }
     }
 
-    let duration_secs = mono.len() as f32 / sample_rate;
-    if mono.is_empty() {
+    let duration_secs = frame_idx as f32 / sample_rate;
+    if frame_idx == 0 {
         return Ok((vec![MIN_PEAK; WAVEFORM_PEAKS], 0.0));
     }
 
     let mut raw_rms = Vec::with_capacity(WAVEFORM_PEAKS);
+    let mut last_rms = 0.0_f32;
     for bin in 0..WAVEFORM_PEAKS {
-        let start = bin * mono.len() / WAVEFORM_PEAKS;
-        let mut end = (bin + 1) * mono.len() / WAVEFORM_PEAKS;
-        if end <= start {
-            end = (start + 1).min(mono.len());
+        if bin_counts[bin] > 0 {
+            last_rms = (bin_sum_sq[bin] / bin_counts[bin] as f64).sqrt() as f32;
         }
-        let slice = &mono[start..end];
-        let sum_sq: f32 = slice.iter().map(|&s| s * s).sum();
-        let rms = (sum_sq / slice.len() as f32).sqrt();
-        raw_rms.push(rms);
+        raw_rms.push(last_rms);
     }
 
     Ok((normalize_peaks(&raw_rms), duration_secs))

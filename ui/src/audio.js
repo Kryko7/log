@@ -60,10 +60,19 @@ async function probeAudioDuration(file) {
   return new Promise((resolve) => {
     const url = URL.createObjectURL(file);
     const audio = new Audio();
+    let settled = false;
+    let timeoutId = null;
     const done = (val) => {
+      if (settled) return;
+      settled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+      audio.onloadedmetadata = null;
+      audio.onerror = null;
+      audio.removeAttribute("src");
       URL.revokeObjectURL(url);
       resolve(val);
     };
+    timeoutId = setTimeout(() => done(null), 3000);
     audio.preload = "metadata";
     audio.onloadedmetadata = () => {
       const dur = Number.isFinite(audio.duration) ? audio.duration : null;
@@ -258,6 +267,9 @@ export function createVoiceRecorder(onRecorded, onCancel) {
       timerId = setInterval(() => {
         const elapsed = (Date.now() - startTime) / 1000;
         timerSpan.textContent = formatDuration(elapsed);
+        if (elapsed >= 1800) {
+          stopAndSave();
+        }
       }, 200);
       renderRecordButton();
     } catch (err) {
@@ -335,6 +347,12 @@ export function createVoiceRecorder(onRecorded, onCancel) {
     onCancel?.();
   });
 
+  card.destroy = async () => {
+    isRecording = false;
+    chunks = [];
+    await teardownAudio();
+  };
+
   renderRecordButton();
   return card;
 }
@@ -383,8 +401,12 @@ export function createWaveformPlayer(memo, onDelete = null) {
 
   const barsEl = document.createElement("div");
   barsEl.className = "waveform-bars";
+  barsEl.tabIndex = 0;
   barsEl.setAttribute("role", "slider");
   barsEl.setAttribute("aria-label", "Audio progress");
+  barsEl.setAttribute("aria-valuemin", "0");
+  barsEl.setAttribute("aria-valuemax", String(Math.round(duration)));
+  barsEl.setAttribute("aria-valuenow", "0");
 
   const peaks = normalizePeaks(memo.peaks, 64);
   const barNodes = peaks.map((amp) => {
@@ -449,6 +471,8 @@ export function createWaveformPlayer(memo, onDelete = null) {
     barNodes.forEach((b, idx) => {
       b.classList.toggle("played", idx < activeBars);
     });
+    barsEl.setAttribute("aria-valuemax", String(Math.round(total)));
+    barsEl.setAttribute("aria-valuenow", String(Math.round(cur)));
     timeEl.textContent = `${formatDuration(cur)} / ${formatDuration(total)}`;
   };
 
@@ -507,6 +531,30 @@ export function createWaveformPlayer(memo, onDelete = null) {
       syncProgress();
     }
   });
+
+  barsEl.addEventListener("keydown", (ev) => {
+    const total =
+      Number.isFinite(audio.duration) && audio.duration > 0
+        ? audio.duration
+        : duration;
+    if (total <= 0) return;
+    if (ev.key === "ArrowLeft") {
+      ev.preventDefault();
+      audio.currentTime = Math.max(0, (audio.currentTime || 0) - 5);
+      syncProgress();
+    } else if (ev.key === "ArrowRight") {
+      ev.preventDefault();
+      audio.currentTime = Math.min(total, (audio.currentTime || 0) + 5);
+      syncProgress();
+    }
+  });
+
+  ribbon.destroy = () => {
+    isPlaying = false;
+    audio.pause();
+    audio.removeAttribute("src");
+    audio.load();
+  };
 
   return ribbon;
 }

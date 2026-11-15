@@ -56,7 +56,7 @@ fn resolve_xdg_dir(
     Ok(home.join(fallback_rel))
 }
 
-fn format_desktop_exec(path: &Path) -> String {
+pub(crate) fn format_desktop_exec(path: &Path) -> String {
     let raw = path.to_string_lossy();
     let needs_quotes = raw.chars().any(|c| {
         c.is_whitespace()
@@ -80,11 +80,15 @@ fn format_desktop_exec(path: &Path) -> String {
             )
     });
     if !needs_quotes {
-        return raw.into_owned();
+        return raw.replace('%', "%%");
     }
     let mut escaped = String::with_capacity(raw.len() + 4);
     escaped.push('"');
     for ch in raw.chars() {
+        if ch == '%' {
+            escaped.push_str("%%");
+            continue;
+        }
         if matches!(ch, '"' | '\\' | '$' | '`') {
             escaped.push('\\');
         }
@@ -212,8 +216,8 @@ pub fn install_desktop(
          TryExec={try_exec}\n\
          Icon={APP_ID}\n\
          Terminal=false\n\
-         Categories=Office;Utility;TextEditor;\n\
-         Keywords=journal;diary;markdown;notes;writing;log;\n\
+         Categories=Utility;TextEditor;\n\
+         Keywords=journal;diary;markdown;notes;writing;\n\
          StartupNotify=true\n\
          StartupWMClass={APP_ID}\n"
     );

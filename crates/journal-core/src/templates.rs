@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use crate::markdown::split_frontmatter;
+use crate::media::write_bytes_atomic;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct TemplateFrontmatter {
@@ -171,7 +172,7 @@ pub fn seed_templates(templates_dir: &Path) -> Result<()> {
 
         let content = format!("---\n{yaml}\n---\n\n{}", tpl.body_markdown);
         let target = templates_dir.join(format!("{}.md", tpl.id));
-        fs::write(target, content)?;
+        write_bytes_atomic(&target, content.as_bytes())?;
     }
 
     Ok(())

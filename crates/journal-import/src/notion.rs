@@ -8,7 +8,8 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufReader, Read};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+use std::sync::OnceLock;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use journal_core::Vault;
@@ -24,6 +25,43 @@ use zip::ZipArchive;
 
 use crate::dedup::{derive_title_from_body, normalize_text, DeduplicationIndex};
 use crate::error::{ImportError, Result};
+
+const MAX_ZIP_TEXT_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_ZIP_MEDIA_BYTES: u64 = 128 * 1024 * 1024;
+
+fn md_image_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"!\[([^\]]*)\]\(([^)\s]+)\)").expect("valid md image regex"))
+}
+
+fn notion_id_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^(.*?)\s+([0-9a-fA-F]{32})$").expect("valid notion id regex"))
+}
+
+fn read_bounded_bytes<R: Read>(reader: R, max_bytes: u64) -> Option<Vec<u8>> {
+    let mut buf = Vec::new();
+    if reader.take(max_bytes + 1).read_to_end(&mut buf).is_err() {
+        return None;
+    }
+    if buf.len() as u64 > max_bytes {
+        return None;
+    }
+    Some(buf)
+}
+
+fn is_safe_relative_ref(candidate: &str) -> bool {
+    if candidate.starts_with('/') || candidate.starts_with('\\') {
+        return false;
+    }
+    let normalized = candidate.replace('\\', "/");
+    !Path::new(&normalized).components().any(|c| {
+        matches!(
+            c,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    })
+}
 
 #[derive(Debug, Clone)]
 pub struct ParsedNotionEntry {
@@ -50,7 +88,7 @@ struct CsvRowMeta {
 enum NotionAssetStore {
     None,
     Dir {
-        root: PathBuf,
+        canon_root: Option<PathBuf>,
     },
     Zip {
         archive: ZipArchive<BufReader<File>>,
@@ -59,6 +97,12 @@ enum NotionAssetStore {
 }
 
 impl NotionAssetStore {
+    fn from_dir(root: &Path) -> Self {
+        Self::Dir {
+            canon_root: fs::canonicalize(root).ok(),
+        }
+    }
+
     fn read_relative(
         &mut self,
         base_dir: Option<&str>,
@@ -69,12 +113,13 @@ impl NotionAssetStore {
             || decoded.starts_with("https://")
             || decoded.starts_with("data:")
             || decoded.starts_with("/vault-media/")
+            || !is_safe_relative_ref(&decoded)
         {
             return None;
         }
 
         let mut candidates = Vec::new();
-        if let Some(base) = base_dir.filter(|b| !b.is_empty()) {
+        if let Some(base) = base_dir.filter(|b| !b.is_empty() && is_safe_relative_ref(b)) {
             candidates.push(format!(
                 "{}/{}",
                 base.trim_end_matches('/'),
@@ -88,19 +133,27 @@ impl NotionAssetStore {
 
         match self {
             NotionAssetStore::None => None,
-            NotionAssetStore::Dir { root } => {
+            NotionAssetStore::Dir { canon_root } => {
+                let canon_root = canon_root.as_ref()?;
                 for cand in candidates {
-                    let candidate_path = root.join(&cand);
-                    if candidate_path.is_file() {
-                        if let Ok(bytes) = fs::read(&candidate_path) {
-                            let filename = candidate_path
-                                .file_name()
-                                .and_then(|s| s.to_str())
-                                .unwrap_or("photo.png")
-                                .to_string();
-                            if !bytes.is_empty() {
-                                return Some((filename, bytes));
-                            }
+                    if !is_safe_relative_ref(&cand) {
+                        continue;
+                    }
+                    let candidate_path = canon_root.join(&cand);
+                    let Ok(canon_cand) = fs::canonicalize(&candidate_path) else {
+                        continue;
+                    };
+                    if !canon_cand.starts_with(canon_root) || !canon_cand.is_file() {
+                        continue;
+                    }
+                    if let Ok(bytes) = fs::read(&canon_cand) {
+                        let filename = canon_cand
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("photo.png")
+                            .to_string();
+                        if !bytes.is_empty() {
+                            return Some((filename, bytes));
                         }
                     }
                 }
@@ -108,18 +161,22 @@ impl NotionAssetStore {
             }
             NotionAssetStore::Zip { archive, paths } => {
                 for cand in candidates {
+                    if !is_safe_relative_ref(&cand) {
+                        continue;
+                    }
                     let norm = cand.replace('\\', "/").to_ascii_lowercase();
                     if let Some(&idx) = paths.get(&norm) {
-                        if let Ok(mut zf) = archive.by_index(idx) {
+                        if let Ok(zf) = archive.by_index(idx) {
                             let zf_name = zf.name().map(|c| c.into_owned()).unwrap_or_default();
                             let filename = Path::new(&zf_name)
                                 .file_name()
                                 .and_then(|s| s.to_str())
                                 .unwrap_or("photo.png")
                                 .to_string();
-                            let mut buf = Vec::new();
-                            if zf.read_to_end(&mut buf).is_ok() && !buf.is_empty() {
-                                return Some((filename, buf));
+                            if let Some(buf) = read_bounded_bytes(zf, MAX_ZIP_MEDIA_BYTES) {
+                                if !buf.is_empty() {
+                                    return Some((filename, buf));
+                                }
                             }
                         }
                     }
@@ -205,12 +262,8 @@ fn process_notion_entry(
         entry.title.trim().to_string()
     };
 
-    // 1. Exact Notion source_id deduplication
-    if vault
-        .find_by_source_id("Notion", &entry.source_id)?
-        .is_some()
-        || dedup.has_source_id(&entry.source_id)
-    {
+    // 1. Exact Notion source_id deduplication (preloaded from Vault + batch dedup index)
+    if dedup.has_source_id(&entry.source_id) {
         return Ok((
             MigrationAuditItem {
                 source_id: entry.source_id,
@@ -319,11 +372,10 @@ fn ingest_notion_images(
     base_dir: Option<&str>,
     body: &str,
 ) -> (String, Vec<PolaroidMeta>, usize) {
-    let img_re = Regex::new(r"!\[([^\]]*)\]\(([^)\s]+)\)").expect("valid md image regex");
     let mut photos = Vec::new();
     let mut media_copied = 0usize;
 
-    let rewritten = img_re
+    let rewritten = md_image_regex()
         .replace_all(body, |caps: &regex::Captures| {
             let alt = caps.get(1).map(|m| m.as_str()).unwrap_or("");
             let target = caps.get(2).map(|m| m.as_str()).unwrap_or("");
@@ -378,12 +430,7 @@ fn load_notion_entries(path: &Path) -> Result<(Vec<ParsedNotionEntry>, NotionAss
             .unwrap_or("note.md");
         let parsed = parse_notion_markdown(name, "", &raw, &HashMap::new());
         let parent = path.parent().unwrap_or_else(|| Path::new("."));
-        return Ok((
-            vec![parsed],
-            NotionAssetStore::Dir {
-                root: parent.to_path_buf(),
-            },
-        ));
+        return Ok((vec![parsed], NotionAssetStore::from_dir(parent)));
     }
     if ext == "csv" {
         let raw = fs::read_to_string(path)?;
@@ -410,7 +457,7 @@ fn load_notion_from_dir(dir: &Path) -> Result<(Vec<ParsedNotionEntry>, NotionAss
 
     for item in WalkDir::new(dir).follow_links(false) {
         let item = item.map_err(|e| ImportError::InvalidSource(e.to_string()))?;
-        if !item.file_type().is_file() {
+        if item.path_is_symlink() || !item.file_type().is_file() {
             continue;
         }
         let p = item.path();
@@ -464,12 +511,7 @@ fn load_notion_from_dir(dir: &Path) -> Result<(Vec<ParsedNotionEntry>, NotionAss
             dir.display()
         )));
     }
-    Ok((
-        entries,
-        NotionAssetStore::Dir {
-            root: dir.to_path_buf(),
-        },
-    ))
+    Ok((entries, NotionAssetStore::from_dir(dir)))
 }
 
 fn load_notion_from_zip(zip_path: &Path) -> Result<(Vec<ParsedNotionEntry>, NotionAssetStore)> {
@@ -478,12 +520,12 @@ fn load_notion_from_zip(zip_path: &Path) -> Result<(Vec<ParsedNotionEntry>, Noti
 
     let mut csv_by_title: HashMap<String, CsvRowMeta> = HashMap::new();
     let mut csv_rows: Vec<CsvRowMeta> = Vec::new();
-    let mut md_files: Vec<(String, String, String)> = Vec::new();
+    let mut md_indices: Vec<(String, String, usize)> = Vec::new();
     let mut json_entries: Vec<ParsedNotionEntry> = Vec::new();
     let mut asset_paths: HashMap<String, usize> = HashMap::new();
 
     for i in 0..archive.len() {
-        let mut zf = archive.by_index(i)?;
+        let zf = archive.by_index(i)?;
         if zf.is_dir() {
             continue;
         }
@@ -494,35 +536,34 @@ fn load_notion_from_zip(zip_path: &Path) -> Result<(Vec<ParsedNotionEntry>, Noti
         }
 
         if lower.ends_with(".csv") {
-            let mut raw = String::new();
-            if zf.read_to_string(&mut raw).is_ok() {
-                for row in parse_notion_csv(&raw) {
-                    let key = normalize_text(&row.title);
-                    if !key.is_empty() {
-                        csv_by_title.insert(key, row.clone());
+            if let Some(bytes) = read_bounded_bytes(zf, MAX_ZIP_TEXT_BYTES) {
+                if let Ok(raw) = String::from_utf8(bytes) {
+                    for row in parse_notion_csv(&raw) {
+                        let key = normalize_text(&row.title);
+                        if !key.is_empty() {
+                            csv_by_title.insert(key, row.clone());
+                        }
+                        csv_rows.push(row);
                     }
-                    csv_rows.push(row);
                 }
             }
         } else if lower.ends_with(".md") || lower.ends_with(".markdown") {
-            let mut raw = String::new();
-            if zf.read_to_string(&mut raw).is_ok() {
-                let fname = Path::new(&name)
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("note.md")
-                    .to_string();
-                let parent_rel = Path::new(&name)
-                    .parent()
-                    .map(|pp| pp.to_string_lossy().replace('\\', "/"))
-                    .unwrap_or_default();
-                md_files.push((fname, parent_rel, raw));
-            }
+            let fname = Path::new(&name)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("note.md")
+                .to_string();
+            let parent_rel = Path::new(&name)
+                .parent()
+                .map(|pp| pp.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
+            md_indices.push((fname, parent_rel, i));
         } else if lower.ends_with(".json") {
-            let mut raw = String::new();
-            if zf.read_to_string(&mut raw).is_ok() {
-                if let Ok(mut parsed) = parse_notion_json_snapshot(&raw) {
-                    json_entries.append(&mut parsed);
+            if let Some(bytes) = read_bounded_bytes(zf, MAX_ZIP_TEXT_BYTES) {
+                if let Ok(raw) = String::from_utf8(bytes) {
+                    if let Ok(mut parsed) = parse_notion_json_snapshot(&raw) {
+                        json_entries.append(&mut parsed);
+                    }
                 }
             }
         } else {
@@ -533,7 +574,31 @@ fn load_notion_from_zip(zip_path: &Path) -> Result<(Vec<ParsedNotionEntry>, Noti
         }
     }
 
-    let entries = combine_md_csv_json(md_files, &csv_by_title, csv_rows, json_entries);
+    let mut entries = Vec::with_capacity(md_indices.len() + csv_rows.len() + json_entries.len());
+    let mut seen_titles = HashSet::new();
+
+    for (fname, parent_rel, idx) in md_indices {
+        if let Ok(zf) = archive.by_index(idx) {
+            if let Some(bytes) = read_bounded_bytes(zf, MAX_ZIP_TEXT_BYTES) {
+                if let Ok(raw) = String::from_utf8(bytes) {
+                    let entry = parse_notion_markdown(&fname, &parent_rel, &raw, &csv_by_title);
+                    seen_titles.insert(normalize_text(&entry.title));
+                    entries.push(entry);
+                }
+            }
+        }
+    }
+
+    for (idx, row) in csv_rows.into_iter().enumerate() {
+        let key = normalize_text(&row.title);
+        if !key.is_empty() && seen_titles.contains(&key) {
+            continue;
+        }
+        entries.push(csv_row_to_entry(idx, row));
+    }
+
+    entries.append(&mut json_entries);
+
     if entries.is_empty() {
         return Err(ImportError::InvalidSource(format!(
             "No Notion Markdown, CSV, or JSON entries found in {}",
@@ -582,8 +647,12 @@ fn csv_row_to_entry(idx: usize, row: CsvRowMeta) -> ParsedNotionEntry {
     let date = row.date.unwrap_or_else(Utc::now);
     let body = row.body.unwrap_or_else(|| row.title.clone());
     let slug = normalize_text(&row.title).replace(' ', "-");
+    let date_tag = row
+        .date
+        .map(|d| d.format("%Y%m%d").to_string())
+        .unwrap_or_else(|| "undated".to_string());
     ParsedNotionEntry {
-        source_id: format!("notion-csv-{idx}-{slug}"),
+        source_id: format!("notion-csv-{idx}-{date_tag}-{slug}"),
         title: row.title,
         date,
         notion_source: row.notion_source,
@@ -672,8 +741,13 @@ fn parse_notion_json_item(idx: usize, item: &Value) -> Option<ParsedNotionEntry>
     }
 
     let source_id = extract_str(obj, &["source_id", "id", "page_id", "url"]).unwrap_or_else(|| {
+        let date_tag = date_raw
+            .as_deref()
+            .and_then(parse_flexible_date)
+            .map(|d| d.format("%Y%m%d").to_string())
+            .unwrap_or_else(|| "undated".to_string());
         format!(
-            "notion-json-{idx}-{}",
+            "notion-json-{idx}-{date_tag}-{}",
             normalize_text(&title).replace(' ', "-")
         )
     });
@@ -1064,8 +1138,7 @@ fn strip_notion_filename_suffix(filename: &str) -> (String, Option<String>) {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or(filename);
-    let re = Regex::new(r"^(.*?)\s+([0-9a-fA-F]{32})$").expect("valid notion id regex");
-    if let Some(caps) = re.captures(stem) {
+    if let Some(caps) = notion_id_regex().captures(stem) {
         let title = caps.get(1).map(|m| m.as_str().trim()).unwrap_or(stem);
         let id = caps.get(2).map(|m| m.as_str().to_string());
         (title.to_string(), id)

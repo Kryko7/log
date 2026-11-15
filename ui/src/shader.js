@@ -209,31 +209,18 @@ export function initPaperShader(canvasEl, initialNight = false) {
     gl.viewport(0, 0, canvasEl.width, canvasEl.height);
   }
 
-  function onMouseMove(ev) {
-    const w = Math.max(window.innerWidth || 1280, 1);
-    const h = Math.max(window.innerHeight || 720, 1);
-    state.targetCursor[0] = Math.min(Math.max(ev.clientX / w, 0), 1);
-    state.targetCursor[1] = Math.min(Math.max(ev.clientY / h, 0), 1);
-  }
-
-  syncSize();
-  window.addEventListener("mousemove", onMouseMove, { passive: true });
-  window.addEventListener("resize", syncSize, { passive: true });
-
-  canvasEl.classList.add("is-active");
-  const fallback = document.getElementById("paper-fallback");
-  if (fallback) fallback.classList.add("is-gpu-ready");
-
+  const reducedQuery =
+    typeof window.matchMedia === "function"
+      ? window.matchMedia("(prefers-reduced-motion: reduce)")
+      : null;
+  let reducedMotion = Boolean(reducedQuery?.matches);
   let rafId = 0;
   let destroyed = false;
+  let lastDrawMs = 0;
   const startMs = performance.now();
+  const NIGHT_BREATH_INTERVAL_MS = 48; // ~20fps calm breathing in Night mode
 
-  function frame(nowMs) {
-    if (destroyed) return;
-    state.smoothCursor[0] += (state.targetCursor[0] - state.smoothCursor[0]) * 0.08;
-    state.smoothCursor[1] += (state.targetCursor[1] - state.smoothCursor[1]) * 0.08;
-    state.smoothNight += (state.targetNight - state.smoothNight) * 0.09;
-
+  function drawFrame(nowMs) {
     gl.useProgram(program);
     gl.bindVertexArray(vao);
     gl.uniform2f(locRes, canvasEl.width, canvasEl.height);
@@ -241,22 +228,141 @@ export function initPaperShader(canvasEl, initialNight = false) {
     gl.uniform1f(locTime, (nowMs - startMs) * 0.001);
     gl.uniform1f(locNight, state.smoothNight);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+    lastDrawMs = nowMs;
+  }
 
+  function needsAnimation() {
+    const nightDelta = Math.abs(state.targetNight - state.smoothNight);
+    const cursorDelta = Math.hypot(
+      state.targetCursor[0] - state.smoothCursor[0],
+      state.targetCursor[1] - state.smoothCursor[1]
+    );
+    if (nightDelta > 0.001 || cursorDelta > 0.0005) return true;
+    return !reducedMotion && state.smoothNight > 0.01;
+  }
+
+  function schedule() {
+    if (destroyed || document.hidden || rafId !== 0) return;
     rafId = window.requestAnimationFrame(frame);
   }
 
-  rafId = window.requestAnimationFrame(frame);
+  function frame(nowMs) {
+    rafId = 0;
+    if (destroyed || document.hidden) return;
+
+    const nightDelta = Math.abs(state.targetNight - state.smoothNight);
+    const cursorDelta = Math.hypot(
+      state.targetCursor[0] - state.smoothCursor[0],
+      state.targetCursor[1] - state.smoothCursor[1]
+    );
+    const settling = nightDelta > 0.001 || cursorDelta > 0.0005;
+
+    if (!settling && !reducedMotion && state.smoothNight > 0.01) {
+      if (nowMs - lastDrawMs < NIGHT_BREATH_INTERVAL_MS) {
+        schedule();
+        return;
+      }
+    }
+
+    if (reducedMotion) {
+      state.smoothCursor[0] = state.targetCursor[0];
+      state.smoothCursor[1] = state.targetCursor[1];
+      state.smoothNight = state.targetNight;
+    } else {
+      state.smoothCursor[0] += (state.targetCursor[0] - state.smoothCursor[0]) * 0.12;
+      state.smoothCursor[1] += (state.targetCursor[1] - state.smoothCursor[1]) * 0.12;
+      state.smoothNight += (state.targetNight - state.smoothNight) * 0.12;
+
+      if (Math.abs(state.targetNight - state.smoothNight) <= 0.001) {
+        state.smoothNight = state.targetNight;
+      }
+      if (
+        Math.hypot(
+          state.targetCursor[0] - state.smoothCursor[0],
+          state.targetCursor[1] - state.smoothCursor[1]
+        ) <= 0.0005
+      ) {
+        state.smoothCursor[0] = state.targetCursor[0];
+        state.smoothCursor[1] = state.targetCursor[1];
+      }
+    }
+
+    drawFrame(nowMs);
+    if (needsAnimation()) {
+      schedule();
+    }
+  }
+
+  function onMouseMove(ev) {
+    const w = Math.max(window.innerWidth || 1280, 1);
+    const h = Math.max(window.innerHeight || 720, 1);
+    state.targetCursor[0] = Math.min(Math.max(ev.clientX / w, 0), 1);
+    state.targetCursor[1] = Math.min(Math.max(ev.clientY / h, 0), 1);
+    schedule();
+  }
+
+  function onResize() {
+    syncSize();
+    drawFrame(performance.now());
+    schedule();
+  }
+
+  function onVisibilityChange() {
+    if (document.hidden) {
+      if (rafId !== 0) {
+        window.cancelAnimationFrame(rafId);
+        rafId = 0;
+      }
+    } else {
+      drawFrame(performance.now());
+      schedule();
+    }
+  }
+
+  function onReducedMotionChange(ev) {
+    reducedMotion = Boolean(ev.matches);
+    if (reducedMotion && rafId !== 0) {
+      window.cancelAnimationFrame(rafId);
+      rafId = 0;
+    }
+    drawFrame(performance.now());
+    schedule();
+  }
+
+  syncSize();
+  window.addEventListener("mousemove", onMouseMove, { passive: true });
+  window.addEventListener("resize", onResize, { passive: true });
+  document.addEventListener("visibilitychange", onVisibilityChange);
+  reducedQuery?.addEventListener?.("change", onReducedMotionChange);
+
+  canvasEl.classList.add("is-active");
+  const fallback = document.getElementById("paper-fallback");
+  if (fallback) fallback.classList.add("is-gpu-ready");
+
+  drawFrame(performance.now());
+  schedule();
 
   return {
     setNightMode(isNight) {
       state.targetNight = isNight ? 1.0 : 0.0;
+      if (reducedMotion) {
+        state.smoothNight = state.targetNight;
+        drawFrame(performance.now());
+      } else {
+        schedule();
+      }
     },
     destroy() {
       if (destroyed) return;
       destroyed = true;
-      window.cancelAnimationFrame(rafId);
+      if (rafId !== 0) {
+        window.cancelAnimationFrame(rafId);
+        rafId = 0;
+      }
       window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("resize", syncSize);
+      window.removeEventListener("resize", onResize);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      reducedQuery?.removeEventListener?.("change", onReducedMotionChange);
       gl.deleteVertexArray(vao);
       gl.deleteProgram(program);
     },

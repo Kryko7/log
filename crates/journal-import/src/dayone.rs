@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufReader, Read};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+use std::sync::OnceLock;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use journal_core::Vault;
@@ -18,6 +19,42 @@ use zip::ZipArchive;
 
 use crate::dedup::{derive_title_from_body, DeduplicationIndex};
 use crate::error::{ImportError, Result};
+
+const MAX_ZIP_JSON_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_ZIP_MEDIA_BYTES: u64 = 128 * 1024 * 1024;
+
+fn unescape_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\\([.!()\[\]-])").expect("valid unescape regex"))
+}
+
+fn moment_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"!\[([^\]]*)\]\(dayone-moment://(?:(audio|photo)/)?([^)\s]+)\)")
+            .expect("valid moment regex")
+    })
+}
+
+fn read_bounded_bytes<R: Read>(reader: R, max_bytes: u64) -> Option<Vec<u8>> {
+    let mut buf = Vec::new();
+    if reader.take(max_bytes + 1).read_to_end(&mut buf).is_err() {
+        return None;
+    }
+    if buf.len() as u64 > max_bytes {
+        return None;
+    }
+    Some(buf)
+}
+
+fn is_safe_relative(path: &Path) -> bool {
+    !path.components().any(|c| {
+        matches!(
+            c,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    })
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
@@ -130,6 +167,7 @@ enum MediaSource {
         lookup: HashMap<String, usize>,
     },
     Dir {
+        canon_root: Option<PathBuf>,
         root: PathBuf,
         lookup: HashMap<String, PathBuf>,
     },
@@ -137,26 +175,32 @@ enum MediaSource {
 
 impl MediaSource {
     fn from_dir(root: &Path) -> Self {
+        let canon_root = fs::canonicalize(root).ok();
         let mut lookup = HashMap::new();
         for sub in ["photos", "audios", "Photo", "Audio"] {
             let dir = root.join(sub);
             if dir.is_dir() {
                 if let Ok(read_dir) = fs::read_dir(&dir) {
                     for item in read_dir.flatten() {
+                        let Ok(ft) = item.file_type() else {
+                            continue;
+                        };
+                        if ft.is_symlink() || !ft.is_file() {
+                            continue;
+                        }
                         let p = item.path();
-                        if p.is_file() {
-                            if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
-                                lookup.insert(name.to_ascii_lowercase(), p.clone());
-                            }
-                            if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-                                lookup.insert(stem.to_ascii_lowercase(), p.clone());
-                            }
+                        if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
+                            lookup.insert(name.to_ascii_lowercase(), p.clone());
+                        }
+                        if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                            lookup.insert(stem.to_ascii_lowercase(), p.clone());
                         }
                     }
                 }
             }
         }
         Self::Dir {
+            canon_root,
             root: root.to_path_buf(),
             lookup,
         }
@@ -181,7 +225,7 @@ impl MediaSource {
             MediaSource::Zip { archive, lookup } => {
                 for cand in &candidates {
                     if let Some(&idx) = lookup.get(cand) {
-                        if let Ok(mut entry) = archive.by_index(idx) {
+                        if let Ok(entry) = archive.by_index(idx) {
                             let entry_name =
                                 entry.name().map(|c| c.into_owned()).unwrap_or_default();
                             let filename = Path::new(&entry_name)
@@ -189,17 +233,25 @@ impl MediaSource {
                                 .and_then(|s| s.to_str())
                                 .unwrap_or("media.bin")
                                 .to_string();
-                            let mut buf = Vec::new();
-                            if entry.read_to_end(&mut buf).is_ok() && !buf.is_empty() {
-                                return Some((filename, buf));
+                            if let Some(buf) = read_bounded_bytes(entry, MAX_ZIP_MEDIA_BYTES) {
+                                if !buf.is_empty() {
+                                    return Some((filename, buf));
+                                }
                             }
                         }
                     }
                 }
                 None
             }
-            MediaSource::Dir { root, lookup } => {
+            MediaSource::Dir {
+                canon_root,
+                root,
+                lookup,
+            } => {
                 for cand in &candidates {
+                    if !is_safe_relative(Path::new(cand)) {
+                        continue;
+                    }
                     if let Some(path) = lookup.get(cand) {
                         if let Ok(buf) = fs::read(path) {
                             let filename = path
@@ -214,9 +266,14 @@ impl MediaSource {
                     }
                     for sub in ["photos", "audios"] {
                         let direct = root.join(sub).join(cand);
-                        if direct.is_file() {
-                            if let Ok(buf) = fs::read(&direct) {
-                                let filename = direct
+                        if let (Some(cr), Ok(canon_direct)) =
+                            (canon_root.as_ref(), fs::canonicalize(&direct))
+                        {
+                            if !canon_direct.starts_with(cr) || !canon_direct.is_file() {
+                                continue;
+                            }
+                            if let Ok(buf) = fs::read(&canon_direct) {
+                                let filename = canon_direct
                                     .file_name()
                                     .and_then(|s| s.to_str())
                                     .unwrap_or("media.bin")
@@ -363,11 +420,12 @@ fn load_dayone_source(path: &Path) -> Result<(Vec<DayOneEntry>, MediaSource)> {
 
         let mut all_entries = Vec::new();
         for (_, idx) in json_indices {
-            let mut zf = archive.by_index(idx)?;
-            let mut raw = String::new();
-            if zf.read_to_string(&mut raw).is_ok() {
-                if let Ok(mut parsed) = parse_dayone_json_str(&raw) {
-                    all_entries.append(&mut parsed);
+            let zf = archive.by_index(idx)?;
+            if let Some(bytes) = read_bounded_bytes(zf, MAX_ZIP_JSON_BYTES) {
+                if let Ok(raw) = String::from_utf8(bytes) {
+                    if let Ok(mut parsed) = parse_dayone_json_str(&raw) {
+                        all_entries.append(&mut parsed);
+                    }
                 }
             }
         }
@@ -393,11 +451,16 @@ fn collect_json_files_in_dir(dir: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     for item in fs::read_dir(dir)? {
         let item = item?;
+        let Ok(ft) = item.file_type() else {
+            continue;
+        };
+        if ft.is_symlink() || !ft.is_file() {
+            continue;
+        }
         let p = item.path();
-        if p.is_file()
-            && p.extension()
-                .and_then(|s| s.to_str())
-                .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+        if p.extension()
+            .and_then(|s| s.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("json"))
         {
             let is_primary = p
                 .file_name()
@@ -442,8 +505,8 @@ fn process_dayone_entry(
     let raw_body = extract_dayone_body(&raw);
     let title = derive_title_from_body(&raw_body, entry_date);
 
-    // 1. Deduplicate by source_id (Vault index + batch dedup index)
-    if vault.find_by_source_id("Day One", source_id)?.is_some() || dedup.has_source_id(source_id) {
+    // 1. Deduplicate by source_id (preloaded from Vault + batch dedup index)
+    if dedup.has_source_id(source_id) {
         return Ok((
             MigrationAuditItem {
                 source_id: source_id.to_string(),
@@ -618,8 +681,7 @@ fn extract_dayone_body(raw: &DayOneEntry) -> String {
 }
 
 fn unescape_dayone_markdown(input: &str) -> String {
-    let re = Regex::new(r"\\([.!()\[\]-])").expect("valid unescape regex");
-    re.replace_all(input, "$1").into_owned()
+    unescape_regex().replace_all(input, "$1").into_owned()
 }
 
 fn parse_dayone_richtext(raw_json: &str) -> Option<String> {
@@ -675,31 +737,29 @@ fn register_moment_keys(
 
 /// Rewrite `![alt](dayone-moment://<id>)` and `![alt](dayone-moment://audio/<id>)` into clean vault links.
 pub fn rewrite_dayone_moments(body: &str, moment_urls: &HashMap<String, (String, bool)>) -> String {
-    let re = Regex::new(r"!\[([^\]]*)\]\(dayone-moment://(?:(audio|photo)/)?([^)\s]+)\)")
-        .expect("valid moment regex");
+    moment_regex()
+        .replace_all(body, |caps: &regex::Captures| {
+            let alt = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+            let kind_prefix = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+            let raw_id = caps.get(3).map(|m| m.as_str()).unwrap_or("");
+            let key = raw_id.trim().to_ascii_lowercase();
 
-    re.replace_all(body, |caps: &regex::Captures| {
-        let alt = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-        let kind_prefix = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-        let raw_id = caps.get(3).map(|m| m.as_str()).unwrap_or("");
-        let key = raw_id.trim().to_ascii_lowercase();
-
-        if let Some((url, is_audio)) = moment_urls.get(&key) {
-            if *is_audio || kind_prefix.eq_ignore_ascii_case("audio") {
-                let label = if alt.trim().is_empty() {
-                    "Voice Memo"
+            if let Some((url, is_audio)) = moment_urls.get(&key) {
+                if *is_audio || kind_prefix.eq_ignore_ascii_case("audio") {
+                    let label = if alt.trim().is_empty() {
+                        "Voice Memo"
+                    } else {
+                        alt.trim()
+                    };
+                    format!("[{label}]({url})")
                 } else {
-                    alt.trim()
-                };
-                format!("[{label}]({url})")
+                    format!("![{alt}]({url})")
+                }
             } else {
-                format!("![{alt}]({url})")
+                caps.get(0).map(|m| m.as_str()).unwrap_or("").to_string()
             }
-        } else {
-            caps.get(0).map(|m| m.as_str()).unwrap_or("").to_string()
-        }
-    })
-    .into_owned()
+        })
+        .into_owned()
 }
 
 fn parse_dayone_timestamp(raw: &str) -> Option<DateTime<Utc>> {

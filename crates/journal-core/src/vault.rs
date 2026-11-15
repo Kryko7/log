@@ -1,6 +1,8 @@
+use std::collections::HashSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
+use std::time::UNIX_EPOCH;
 
 use chrono::{Datelike, Utc};
 use journal_types::{
@@ -15,7 +17,10 @@ use walkdir::WalkDir;
 
 use crate::error::{Result, VaultError};
 use crate::index;
-use crate::markdown::{extract_wikilinks, parse_entry_file, serialize_entry, slugify};
+use crate::markdown::{
+    extract_wikilinks, parse_entry_file, parse_entry_file_no_html, render_html_preview,
+    serialize_entry, slugify,
+};
 use crate::media::{self, write_bytes_atomic};
 use crate::templates;
 
@@ -81,6 +86,8 @@ impl Vault {
 
         if !index_existed {
             vault.rebuild_index()?;
+        } else {
+            vault.sync_index_incremental()?;
         }
 
         Ok(vault)
@@ -94,36 +101,7 @@ impl Vault {
     /// Scan all `.md` files in `entries/` and rebuild `.index/index.sqlite` from scratch.
     pub fn rebuild_index(&self) -> Result<usize> {
         let notebooks = self.read_notebooks_file()?;
-        let entries_dir = self.root.join("entries");
-
-        let mut parsed_entries = Vec::new();
-        if entries_dir.exists() {
-            for item in WalkDir::new(&entries_dir).follow_links(false) {
-                let item = item.map_err(|e| {
-                    VaultError::Io(std::io::Error::other(format!("Walkdir error: {e}")))
-                })?;
-                let path = item.path();
-                if !item.file_type().is_file() {
-                    continue;
-                }
-                let is_md = path
-                    .extension()
-                    .and_then(|s| s.to_str())
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
-                let is_hidden = path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .is_some_and(|name| name.starts_with('.'));
-                if !is_md || is_hidden {
-                    continue;
-                }
-
-                let rel_path = to_vault_relative_posix(&self.root, path)?;
-                let raw = fs::read_to_string(path)?;
-                let entry = parse_entry_file(&raw, &rel_path)?;
-                parsed_entries.push(entry);
-            }
-        }
+        let disk_files = self.collect_entry_files()?;
 
         let mut conn = self.conn.lock().map_err(|_| VaultError::LockPoisoned)?;
         let tx = conn.transaction()?;
@@ -134,12 +112,100 @@ impl Vault {
         tx.execute("DELETE FROM entries", [])?;
         index::sync_notebooks_table(&tx, &notebooks)?;
 
-        for entry in &parsed_entries {
-            index::upsert_entry(&tx, entry)?;
+        let mut indexed = 0usize;
+        for (abs_path, rel_path, mtime, size) in disk_files {
+            let raw = fs::read_to_string(&abs_path)?;
+            let entry = parse_entry_file_no_html(&raw, &rel_path)?;
+            index::upsert_entry_with_stat(&tx, &entry, mtime, size)?;
+            indexed += 1;
         }
 
         tx.commit()?;
-        Ok(parsed_entries.len())
+        Ok(indexed)
+    }
+
+    /// Reconcile added, modified, and deleted `.md` files incrementally using `(mtime, size)`.
+    pub fn sync_index_incremental(&self) -> Result<usize> {
+        let disk_files = self.collect_entry_files()?;
+        let mut disk_paths = HashSet::with_capacity(disk_files.len());
+        for (_, rel_path, _, _) in &disk_files {
+            disk_paths.insert(rel_path.clone());
+        }
+
+        let indexed = {
+            let conn = self.conn.lock().map_err(|_| VaultError::LockPoisoned)?;
+            index::list_indexed_files(&conn)?
+        };
+
+        let deleted_paths: Vec<String> = indexed
+            .keys()
+            .filter(|p| !disk_paths.contains(*p))
+            .cloned()
+            .collect();
+
+        let changed_files: Vec<(PathBuf, String, i64, i64)> = disk_files
+            .into_iter()
+            .filter(|(_, rel_path, mtime, size)| {
+                indexed.get(rel_path).copied() != Some((*mtime, *size))
+            })
+            .collect();
+
+        if deleted_paths.is_empty() && changed_files.is_empty() {
+            return Ok(0);
+        }
+
+        let mut updated_count = 0usize;
+        let mut conn = self.conn.lock().map_err(|_| VaultError::LockPoisoned)?;
+        let tx = conn.transaction()?;
+
+        for del_path in deleted_paths {
+            index::delete_entry_by_path(&tx, &del_path)?;
+            updated_count += 1;
+        }
+
+        for (abs_path, rel_path, mtime, size) in changed_files {
+            let raw = fs::read_to_string(&abs_path)?;
+            let entry = parse_entry_file_no_html(&raw, &rel_path)?;
+            index::upsert_entry_with_stat(&tx, &entry, mtime, size)?;
+            updated_count += 1;
+        }
+
+        tx.commit()?;
+        Ok(updated_count)
+    }
+
+    fn collect_entry_files(&self) -> Result<Vec<(PathBuf, String, i64, i64)>> {
+        let entries_dir = self.root.join("entries");
+        let mut files = Vec::new();
+        if !entries_dir.exists() {
+            return Ok(files);
+        }
+
+        for item in WalkDir::new(&entries_dir).follow_links(false) {
+            let item = item.map_err(|e| {
+                VaultError::Io(std::io::Error::other(format!("Walkdir error: {e}")))
+            })?;
+            let path = item.path();
+            if !item.file_type().is_file() {
+                continue;
+            }
+            let is_md = path
+                .extension()
+                .and_then(|s| s.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
+            let is_hidden = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .is_some_and(|name| name.starts_with('.'));
+            if !is_md || is_hidden {
+                continue;
+            }
+
+            let rel_path = to_vault_relative_posix(&self.root, path)?;
+            let (mtime, size) = file_stat(path)?;
+            files.push((path.to_path_buf(), rel_path, mtime, size));
+        }
+        Ok(files)
     }
 
     /// Start a recursive `notify` filesystem watcher on `entries/` and `notebooks.json`.
@@ -165,15 +231,10 @@ impl Vault {
         Ok(VaultWatcher { _watcher: watcher })
     }
 
-    /// List all notebooks from `notebooks.json` enriched with live `entry_count`.
+    /// List all notebooks from SQLite enriched with live `entry_count`.
     pub fn list_notebooks(&self) -> Result<Vec<Notebook>> {
-        let mut notebooks = self.read_notebooks_file()?;
         let conn = self.conn.lock().map_err(|_| VaultError::LockPoisoned)?;
-        let counts = index::notebook_entry_counts(&conn)?;
-        for nb in &mut notebooks {
-            nb.entry_count = counts.get(&nb.id).copied().unwrap_or(0);
-        }
-        Ok(notebooks)
+        index::list_notebooks_with_counts(&conn)
     }
 
     /// Create and persist a new notebook in `notebooks.json` and the SQLite index.
@@ -233,13 +294,27 @@ impl Vault {
             })?
         };
 
+        if !is_safe_vault_rel_path(&rel_path) {
+            return Err(VaultError::InvalidInput(format!(
+                "Unsafe vault entry path: {rel_path}"
+            )));
+        }
+
         let abs_path = self.root.join(&rel_path);
         if !abs_path.exists() {
             return Err(VaultError::NotFound(format!(
                 "Entry file missing on disk: {rel_path}"
             )));
         }
-        let raw = fs::read_to_string(&abs_path)?;
+        let canon_root = fs::canonicalize(&self.root)?;
+        let canon_abs = fs::canonicalize(&abs_path)?;
+        if !canon_abs.starts_with(&canon_root) {
+            return Err(VaultError::InvalidInput(format!(
+                "Entry path escapes vault root: {rel_path}"
+            )));
+        }
+
+        let raw = fs::read_to_string(&canon_abs)?;
         let mut entry = parse_entry_file(&raw, &rel_path)?;
 
         let conn = self.conn.lock().map_err(|_| VaultError::LockPoisoned)?;
@@ -273,7 +348,6 @@ impl Vault {
             .or_else(|| Some("log".to_string()));
         let source_id = existing.as_ref().and_then(|m| m.4.clone());
 
-        let links = extract_wikilinks(&req.body);
         let title = if req.title.trim().is_empty() {
             "Untitled Entry".to_string()
         } else {
@@ -296,17 +370,30 @@ impl Vault {
             stamps: req.stamps,
             photos: req.photos,
             audio: req.audio,
-            links,
+            links: Vec::new(),
         };
 
-        self.save_entry_with_frontmatter(fm, &req.body)
+        self.save_entry_internal(fm, &req.body, existing.map(|m| m.0))
     }
 
     /// Atomically persist an entry with explicit [`EntryFrontmatter`] (used by editors and importers).
     pub fn save_entry_with_frontmatter(
         &self,
+        frontmatter: EntryFrontmatter,
+        body: &str,
+    ) -> Result<Entry> {
+        let old_path = {
+            let conn = self.conn.lock().map_err(|_| VaultError::LockPoisoned)?;
+            index::find_existing_entry_meta(&conn, frontmatter.id)?.map(|m| m.0)
+        };
+        self.save_entry_internal(frontmatter, body, old_path)
+    }
+
+    fn save_entry_internal(
+        &self,
         mut frontmatter: EntryFrontmatter,
         body: &str,
+        old_path: Option<String>,
     ) -> Result<Entry> {
         let notebook_id = frontmatter
             .notebook_id
@@ -316,20 +403,8 @@ impl Vault {
             .unwrap_or_else(|| DEFAULT_NOTEBOOK_ID.to_string());
         frontmatter.notebook_id = Some(notebook_id.clone());
 
-        for extracted in extract_wikilinks(body) {
-            if !frontmatter
-                .links
-                .iter()
-                .any(|existing| existing.eq_ignore_ascii_case(&extracted))
-            {
-                frontmatter.links.push(extracted);
-            }
-        }
-
-        let old_path = {
-            let conn = self.conn.lock().map_err(|_| VaultError::LockPoisoned)?;
-            index::find_existing_entry_meta(&conn, frontmatter.id)?.map(|m| m.0)
-        };
+        // Keep frontmatter.links synchronized with the current Markdown prose.
+        frontmatter.links = extract_wikilinks(body);
 
         let rel_path =
             self.allocate_entry_rel_path(&notebook_id, &frontmatter, old_path.as_deref());
@@ -339,7 +414,7 @@ impl Vault {
         write_bytes_atomic(&abs_path, serialized.as_bytes())?;
 
         if let Some(prev_rel) = old_path {
-            if prev_rel != rel_path {
+            if prev_rel != rel_path && is_safe_vault_rel_path(&prev_rel) {
                 let prev_abs = self.root.join(&prev_rel);
                 if prev_abs.exists() {
                     let _ = fs::remove_file(prev_abs);
@@ -347,9 +422,12 @@ impl Vault {
             }
         }
 
-        let mut entry = parse_entry_file(&serialized, &rel_path)?;
+        let (mtime, size) = file_stat(&abs_path)?;
+        let mut entry = Entry::new(frontmatter, body, &rel_path);
+        entry.html_preview = Some(render_html_preview(&entry.body));
+
         let conn = self.conn.lock().map_err(|_| VaultError::LockPoisoned)?;
-        index::upsert_entry(&conn, &entry)?;
+        index::upsert_entry_with_stat(&conn, &entry, mtime, size)?;
         entry.backlinks = index::get_backlinks(&conn, entry.id)?;
 
         Ok(entry)
@@ -430,15 +508,16 @@ impl Vault {
 
     /// Compute overall vault statistics, streaks, and top tags.
     pub fn get_vault_stats(&self) -> Result<VaultStats> {
-        let notebooks = self.read_notebooks_file()?;
         let today = Utc::now().date_naive();
         let conn = self.conn.lock().map_err(|_| VaultError::LockPoisoned)?;
+        let total_notebooks: i64 =
+            conn.query_row("SELECT COUNT(*) FROM notebooks", [], |row| row.get(0))?;
         let metrics = index::compute_vault_metrics(&conn, today)?;
 
         Ok(VaultStats {
             total_entries: metrics.total_entries,
             total_words: metrics.total_words,
-            total_notebooks: notebooks.len(),
+            total_notebooks: total_notebooks as usize,
             total_photos: metrics.total_photos,
             total_audio_memos: metrics.total_audio_memos,
             current_streak_days: metrics.current_streak_days,
@@ -509,7 +588,8 @@ impl Vault {
         let mut suffix = 2_usize;
         while self.root.join(&candidate_rel).exists() {
             if let Ok(existing_raw) = fs::read_to_string(self.root.join(&candidate_rel)) {
-                if let Ok(existing_entry) = parse_entry_file(&existing_raw, &candidate_rel) {
+                if let Ok(existing_entry) = parse_entry_file_no_html(&existing_raw, &candidate_rel)
+                {
                     if existing_entry.id == frontmatter.id {
                         break;
                     }
@@ -521,6 +601,25 @@ impl Vault {
         }
         candidate_rel
     }
+}
+
+fn file_stat(path: &Path) -> Result<(i64, i64)> {
+    let meta = fs::metadata(path)?;
+    let size = meta.len() as i64;
+    let mtime_ns = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos().min(i64::MAX as u128) as i64)
+        .unwrap_or(0);
+    Ok((mtime_ns, size))
+}
+
+fn is_safe_vault_rel_path(rel_path: &str) -> bool {
+    let path = Path::new(rel_path);
+    !rel_path.is_empty()
+        && !path.is_absolute()
+        && path.components().all(|c| matches!(c, Component::Normal(_)))
 }
 
 fn ensure_vault_dirs(root: &Path) -> Result<()> {

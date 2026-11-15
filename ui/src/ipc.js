@@ -9,6 +9,10 @@ export function isTauriRuntime() {
   );
 }
 
+function encodePathPreservingSlashes(path) {
+  return encodeURI(path).replace(/#/g, "%23").replace(/\?/g, "%3F");
+}
+
 export function resolveVaultUrl(url) {
   if (!url) return "";
   const s = String(url).trim();
@@ -23,7 +27,7 @@ export function resolveVaultUrl(url) {
   ) {
     return s;
   }
-  const normalized = s.startsWith("/") ? s : `/${s}`;
+  const normalized = encodePathPreservingSlashes(s.startsWith("/") ? s : `/${s}`);
   if (
     isTauriRuntime() &&
     (normalized.startsWith("/vault-media/") ||
@@ -41,22 +45,53 @@ export function bytesToBase64(bytes) {
       : bytes instanceof ArrayBuffer
         ? new Uint8Array(bytes)
         : new Uint8Array(bytes || []);
-  const chunkSize = 0x8000;
+  const chunkSize = 0x2000;
   const parts = [];
   for (let i = 0; i < uint8.length; i += chunkSize) {
-    const slice = uint8.subarray(i, i + chunkSize);
-    parts.push(String.fromCharCode.apply(null, slice));
+    const end = Math.min(i + chunkSize, uint8.length);
+    let chunkStr = "";
+    for (let j = i; j < end; j += 1) {
+      chunkStr += String.fromCharCode(uint8[j]);
+    }
+    parts.push(chunkStr);
   }
   return btoa(parts.join(""));
 }
 
-async function toUint8Array(input) {
-  if (input instanceof Uint8Array) return input;
-  if (input instanceof ArrayBuffer) return new Uint8Array(input);
+export function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || "");
+      const comma = result.indexOf(",");
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = () =>
+      reject(reader.error || new Error("Failed to read file as Base64"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function inputToBase64(input) {
+  if (typeof Blob !== "undefined" && input instanceof Blob) {
+    return blobToBase64(input);
+  }
+  if (input instanceof Uint8Array || input instanceof ArrayBuffer) {
+    return bytesToBase64(input);
+  }
   if (input && typeof input.arrayBuffer === "function") {
-    return new Uint8Array(await input.arrayBuffer());
+    return bytesToBase64(new Uint8Array(await input.arrayBuffer()));
   }
   throw new Error("Expected Blob, File, ArrayBuffer, or Uint8Array");
+}
+
+function requireId(raw, label = "id") {
+  const val =
+    typeof raw === "object" && raw !== null ? raw.entry_id ?? raw.id : raw;
+  if (val === null || val === undefined || String(val).trim() === "") {
+    throw new Error(`Missing required ${label}`);
+  }
+  return String(val);
 }
 
 export async function invokeCmd(cmd, args = {}) {
@@ -99,7 +134,7 @@ export const api = {
 
   getEntry: (id) =>
     invokeCmd("get_entry", {
-      id: typeof id === "object" && id !== null ? String(id.id) : String(id),
+      id: requireId(id, "entry id"),
     }),
 
   saveEntry: (req = {}) =>
@@ -121,7 +156,7 @@ export const api = {
 
   deleteEntry: (id) =>
     invokeCmd("delete_entry", {
-      id: typeof id === "object" && id !== null ? String(id.id) : String(id),
+      id: requireId(id, "entry id"),
     }),
 
   searchEntries: (query = {}) =>
@@ -169,10 +204,7 @@ export const api = {
 
   getBacklinks: (entryId) =>
     invokeCmd("get_backlinks", {
-      entry_id:
-        typeof entryId === "object" && entryId !== null
-          ? String(entryId.entry_id ?? entryId.id)
-          : String(entryId),
+      entry_id: requireId(entryId, "entry_id"),
     }),
 
   listTemplates: () => invokeCmd("list_templates", {}),
@@ -241,14 +273,14 @@ export const api = {
   },
 
   uploadPhoto: async (fileOrBytes, caption = null, explicitName = null) => {
-    const uint8 = await toUint8Array(fileOrBytes);
+    const data_base64 = await inputToBase64(fileOrBytes);
     const filename =
       explicitName ||
       (fileOrBytes && typeof fileOrBytes.name === "string" && fileOrBytes.name) ||
       "photo.jpg";
     return invokeCmd("upload_photo", {
       filename,
-      data_base64: bytesToBase64(uint8),
+      data_base64,
       caption: caption ?? null,
     });
   },
@@ -258,7 +290,7 @@ export const api = {
     filename = "voice-memo.wav",
     durationSecs = null
   ) => {
-    const uint8 = await toUint8Array(blobOrBytes);
+    const data_base64 = await inputToBase64(blobOrBytes);
     const resolvedName =
       filename ||
       (blobOrBytes &&
@@ -267,7 +299,7 @@ export const api = {
       "voice-memo.wav";
     return invokeCmd("upload_audio", {
       filename: resolvedName,
-      data_base64: bytesToBase64(uint8),
+      data_base64,
       duration_secs:
         typeof durationSecs === "number" && Number.isFinite(durationSecs)
           ? durationSecs

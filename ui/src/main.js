@@ -67,6 +67,11 @@ let modalRoot = null;
 let paperShader = null;
 let activeEditorHandle = null;
 let searchDebounceTimer = null;
+let entryLoadSeq = 0;
+let calendarLoadSeq = 0;
+let searchSeq = 0;
+let refreshSeq = 0;
+let statsDebounceTimer = null;
 
 function applyTheme(isNight) {
   state.nightMode = Boolean(isNight);
@@ -141,7 +146,69 @@ function createBlankEntry(dateStr = null) {
   };
 }
 
+function upsertEntrySummaryFromSaved(saved) {
+  if (!saved || !saved.id) return;
+  const fm = saved.frontmatter || {};
+  const plainSnippet = String(saved.body || "")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 180);
+  const summary = {
+    id: saved.id,
+    title: fm.title || "",
+    date: fm.date,
+    updated_at: fm.updated_at || fm.date,
+    notebook_id: fm.notebook_id,
+    tags: fm.tags || [],
+    mood: fm.mood || null,
+    starred: Boolean(fm.starred),
+    snippet: plainSnippet,
+    word_count: saved.word_count || 0,
+    reading_minutes: saved.reading_minutes || 1,
+    path: saved.path || "",
+    cover_photo: fm.photos?.[0]?.thumbnail_url || fm.photos?.[0]?.url || null,
+    has_audio: (fm.audio || []).length > 0,
+    has_photos: (fm.photos || []).length > 0,
+    weather: fm.weather || null,
+    location: fm.location || null,
+    stamps: fm.stamps || [],
+  };
+
+  const idx = state.entries.findIndex((e) => e.id === saved.id);
+  const prevWords = idx >= 0 ? Number(state.entries[idx].word_count || 0) : 0;
+  if (idx >= 0) {
+    state.entries[idx] = summary;
+  } else {
+    state.entries.unshift(summary);
+  }
+  if (state.stats) {
+    const delta = (summary.word_count || 0) - prevWords;
+    state.stats.total_words = Math.max(0, (state.stats.total_words || 0) + delta);
+    if (idx < 0) {
+      state.stats.total_entries = (state.stats.total_entries || 0) + 1;
+    }
+  }
+  recomputeFilteredEntries();
+  renderSidebarOnly();
+
+  if (statsDebounceTimer) clearTimeout(statsDebounceTimer);
+  statsDebounceTimer = setTimeout(() => {
+    statsDebounceTimer = null;
+    api
+      .getVaultStats()
+      .then((s) => {
+        if (s) {
+          state.stats = s;
+          renderSidebarOnly();
+        }
+      })
+      .catch(() => {});
+  }, 4000);
+}
+
 async function refreshVaultIndex() {
+  const seq = ++refreshSeq;
   const [statsRes, nbRes, entriesRes, tagsRes, otdRes] =
     await Promise.allSettled([
       api.getVaultStats(),
@@ -150,6 +217,8 @@ async function refreshVaultIndex() {
       api.listTags(),
       api.getOnThisDay(),
     ]);
+
+  if (seq !== refreshSeq) return;
 
   if (statsRes.status === "fulfilled" && statsRes.value) {
     state.stats = statsRes.value;
@@ -175,26 +244,33 @@ async function refreshVaultIndex() {
 }
 
 async function loadCalendarMonth(year, month) {
+  const seq = ++calendarLoadSeq;
   state.calendarYear = year;
   state.calendarMonth = month;
   try {
-    state.calendarDays = await api.getCalendarMonth(
+    const days = await api.getCalendarMonth(
       year,
       month,
       state.selectedNotebookId
     );
+    if (seq !== calendarLoadSeq) return;
+    state.calendarDays = days;
   } catch {
+    if (seq !== calendarLoadSeq) return;
     state.calendarDays = [];
   }
 }
 
 async function openEntryById(id, turnDir = null) {
   if (!id) return;
+  const seq = ++entryLoadSeq;
   if (state.currentEntry?.id !== id) {
     await activeEditorHandle?.flushSave();
+    if (seq !== entryLoadSeq) return;
   }
   try {
     const entry = await api.getEntry(id);
+    if (seq !== entryLoadSeq) return;
     state.currentEntry = entry;
     state.activeView = "editor";
     state.pageTurnDir = turnDir;
@@ -290,7 +366,10 @@ function renderSidebarOnly() {
 
 function renderMainView() {
   if (!viewRoot) return;
-  activeEditorHandle = null;
+  if (activeEditorHandle) {
+    activeEditorHandle.destroy?.();
+    activeEditorHandle = null;
+  }
 
   if (state.activeView === "editor") {
     if (!state.currentEntry) {
@@ -307,11 +386,20 @@ function renderMainView() {
         state.searchQuery = query;
         openModal("search");
       },
-      onSaveEntry: async (payload) => {
+      onSaveEntry: async (payload, meta = {}) => {
         const saved = await api.saveEntry(payload);
-        state.currentEntry = saved;
-        // Refresh sidebar counts/lists in background without touching editor DOM
-        refreshVaultIndex().catch(() => {});
+        if (
+          !state.currentEntry ||
+          state.currentEntry.id === null ||
+          state.currentEntry.id === saved.id
+        ) {
+          state.currentEntry = saved;
+        }
+        if (meta?.structural) {
+          refreshVaultIndex().catch(() => {});
+        } else {
+          upsertEntrySummaryFromSaved(saved);
+        }
         return saved;
       },
       onDeleteEntry: async (id) => {
@@ -391,6 +479,7 @@ function renderMainView() {
 }
 
 async function runSearchQuery(text) {
+  const seq = ++searchSeq;
   state.searchQuery = text;
   const trimmed = text.trim();
   if (!trimmed) {
@@ -402,17 +491,22 @@ async function runSearchQuery(text) {
   state.searchLoading = true;
   renderModal();
   try {
-    state.searchResults = await api.searchEntries({
+    const hits = await api.searchEntries({
       text: trimmed,
       limit: 40,
       offset: 0,
     });
+    if (seq !== searchSeq) return;
+    state.searchResults = hits;
   } catch {
+    if (seq !== searchSeq) return;
     state.searchResults = [];
   } finally {
-    state.searchLoading = false;
-    if (state.activeModal === "search") {
-      renderModal();
+    if (seq === searchSeq) {
+      state.searchLoading = false;
+      if (state.activeModal === "search") {
+        renderModal();
+      }
     }
   }
 }
@@ -518,46 +612,54 @@ function renderModal() {
           if (state.activeModal === "migration") renderModal();
         }
       },
-      onImportDayOneFile: (file) => {
+      onImportDayOneFile: async (file, dryRun = false) => {
         if (file?.path) {
-          api
-            .importDayone({
+          state.migrationLoading = true;
+          state.migrationError = null;
+          renderModal();
+          try {
+            state.migrationReport = await api.importDayone({
               zip_path: file.path,
               notebook_id: state.selectedNotebookId,
-              dry_run: false,
-            })
-            .then(async (rep) => {
-              state.migrationReport = rep;
-              await refreshVaultIndex();
-              renderModal();
-            })
-            .catch((err) => {
-              state.migrationError = err?.message || "Import failed.";
-              renderModal();
+              dry_run: Boolean(dryRun),
             });
+            if (!dryRun) {
+              await refreshVaultIndex();
+              if (state.activeView === "timeline") renderMainView();
+            }
+          } catch (err) {
+            state.migrationError = err?.message || "Import failed.";
+          } finally {
+            state.migrationLoading = false;
+            if (state.activeModal === "migration") renderModal();
+          }
           return;
         }
         state.migrationError =
           "Enter the full local path to your Day One .zip or folder below and click Import Path.";
         renderModal();
       },
-      onImportNotionFile: (file) => {
+      onImportNotionFile: async (file, dryRun = false) => {
         if (file?.path) {
-          api
-            .importNotion({
+          state.migrationLoading = true;
+          state.migrationError = null;
+          renderModal();
+          try {
+            state.migrationReport = await api.importNotion({
               source_path: file.path,
               notebook_id: state.selectedNotebookId,
-              dry_run: false,
-            })
-            .then(async (rep) => {
-              state.migrationReport = rep;
-              await refreshVaultIndex();
-              renderModal();
-            })
-            .catch((err) => {
-              state.migrationError = err?.message || "Import failed.";
-              renderModal();
+              dry_run: Boolean(dryRun),
             });
+            if (!dryRun) {
+              await refreshVaultIndex();
+              if (state.activeView === "timeline") renderMainView();
+            }
+          } catch (err) {
+            state.migrationError = err?.message || "Import failed.";
+          } finally {
+            state.migrationLoading = false;
+            if (state.activeModal === "migration") renderModal();
+          }
           return;
         }
         state.migrationError =
@@ -716,7 +818,12 @@ function wireGlobalShortcuts() {
       applySidebarCollapsed(!state.sidebarCollapsed);
       return;
     }
-    if (mod && ev.key.toLowerCase() === "e" && state.activeView === "editor") {
+    if (
+      mod &&
+      ev.key.toLowerCase() === "e" &&
+      state.activeView === "editor" &&
+      !state.activeModal
+    ) {
       ev.preventDefault();
       activeEditorHandle?.toggleMode();
     }
@@ -795,18 +902,28 @@ async function bootstrap() {
 
   recomputeFilteredEntries();
 
-  if (state.entries.length > 0) {
+  const userStartedTyping =
+    Boolean(activeEditorHandle?.isDirty?.()) ||
+    Boolean(state.currentEntry?.id);
+
+  if (!userStartedTyping && state.entries.length > 0 && state.activeView === "editor") {
     try {
-      state.currentEntry = await api.getEntry(state.entries[0].id);
+      const loaded = await api.getEntry(state.entries[0].id);
+      if (!activeEditorHandle?.isDirty?.()) {
+        state.currentEntry = loaded;
+        renderSidebarOnly();
+        renderMainView();
+        return;
+      }
     } catch {
-      state.currentEntry = createBlankEntry();
+      // keep existing blank draft
     }
-  } else {
-    state.currentEntry = createBlankEntry();
   }
 
   renderSidebarOnly();
-  renderMainView();
+  if (!userStartedTyping) {
+    renderMainView();
+  }
 }
 
 if (document.readyState === "loading") {

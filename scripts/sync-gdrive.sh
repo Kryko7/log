@@ -17,7 +17,7 @@ if [[ -z "$ARCHIVE_PATH" ]]; then
         echo "Error: backups directory not found at $BACKUPS_DIR" >&2
         exit 1
     fi
-    ARCHIVE_PATH="$(ls -1t "$BACKUPS_DIR"/*.tar.gz.age 2>/dev/null | head -n 1 || true)"
+    ARCHIVE_PATH="$(find "$BACKUPS_DIR" -maxdepth 1 -type f -name '*.tar.gz.age' -printf '%T@\t%p\n' 2>/dev/null | sort -nr | head -n 1 | cut -f2- || true)"
 fi
 
 if [[ -z "$ARCHIVE_PATH" || ! -f "$ARCHIVE_PATH" ]]; then

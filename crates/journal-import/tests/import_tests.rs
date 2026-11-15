@@ -345,3 +345,111 @@ fn notion_export_folder_markdown_and_csv_delta_imports_with_embedded_photo() {
     assert_eq!(entry.frontmatter.photos.len(), 1);
     assert!(entry.body.contains("/vault-media/photos/"));
 }
+
+#[test]
+fn dayone_same_day_image_only_entries_do_not_collide() {
+    let tmp = TempDir::new("dayone-image-only");
+    let vault_dir = tmp.path.join("vault");
+    let zip_path = tmp.path.join("image-only.zip");
+
+    let journal_json = serde_json::json!({
+        "metadata": { "version": "1.0" },
+        "entries": [
+            {
+                "uuid": "D1-IMG-ONLY-1",
+                "creationDate": "2026-03-10T09:00:00Z",
+                "text": "![](dayone-moment://IMG-001)",
+                "photos": [{ "identifier": "IMG-001", "md5": "img001", "type": "png" }]
+            },
+            {
+                "uuid": "D1-IMG-ONLY-2",
+                "creationDate": "2026-03-10T18:30:00Z",
+                "text": "![](dayone-moment://IMG-002)",
+                "photos": [{ "identifier": "IMG-002", "md5": "img002", "type": "png" }]
+            }
+        ]
+    });
+
+    {
+        let file = File::create(&zip_path).expect("create zip");
+        let mut zip = ZipWriter::new(file);
+        let opts = SimpleFileOptions::default();
+
+        zip.start_file("Journal.json", opts).unwrap();
+        zip.write_all(
+            serde_json::to_string_pretty(&journal_json)
+                .unwrap()
+                .as_bytes(),
+        )
+        .unwrap();
+
+        zip.start_file("photos/img001.png", opts).unwrap();
+        zip.write_all(TEST_PNG).unwrap();
+
+        zip.start_file("photos/img002.png", opts).unwrap();
+        zip.write_all(TEST_PNG).unwrap();
+
+        zip.finish().unwrap();
+    }
+
+    let vault = Vault::open(&vault_dir).expect("open vault");
+    let report = import_dayone(
+        &vault,
+        &ImportDayOneRequest {
+            zip_path: zip_path.to_string_lossy().into_owned(),
+            notebook_id: None,
+            dry_run: false,
+        },
+    )
+    .expect("import same-day image-only Day One entries");
+
+    assert_eq!(report.total_found, 2);
+    assert_eq!(report.imported_count, 2);
+    assert_eq!(report.skipped_count, 0);
+    assert_eq!(report.failed_count, 0);
+    assert_eq!(report.media_copied, 2);
+    assert!(report
+        .items
+        .iter()
+        .all(|item| item.status == MigrationStatus::Imported));
+}
+
+#[test]
+fn notion_directory_rejects_traversal_and_symlink_images() {
+    let tmp = TempDir::new("notion-traversal");
+    let vault_dir = tmp.path.join("vault");
+    let export_dir = tmp.path.join("notion-export");
+    fs::create_dir_all(&export_dir).unwrap();
+
+    let outside_secret = tmp.path.join("outside-secret.png");
+    fs::write(&outside_secret, TEST_PNG).unwrap();
+
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&outside_secret, export_dir.join("symlink-secret.png")).unwrap();
+
+    fs::write(
+        export_dir.join("Traversal Test 0123456789abcdef0123456789abcdef.md"),
+        "# Traversal Test\n\nDate: March 12, 2026\nSource: Notion\n\n![Escape](../outside-secret.png)\n\n![Symlink](symlink-secret.png)\n",
+    )
+    .unwrap();
+
+    let vault = Vault::open(&vault_dir).expect("open vault");
+    let report = import_notion(
+        &vault,
+        &ImportNotionRequest {
+            source_path: export_dir.to_string_lossy().into_owned(),
+            notebook_id: None,
+            dry_run: false,
+        },
+    )
+    .expect("import notion directory");
+
+    assert_eq!(report.imported_count, 1);
+    assert_eq!(report.media_copied, 0);
+
+    let entry = vault
+        .get_entry("Traversal Test")
+        .expect("get imported traversal test entry");
+    assert!(entry.frontmatter.photos.is_empty());
+    assert!(!entry.body.contains("/vault-media/"));
+}

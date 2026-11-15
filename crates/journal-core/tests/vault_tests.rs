@@ -659,6 +659,237 @@ fn watch_vault_detects_entry_change() {
     assert!(received.is_ok(), "expected notify event on entry write");
 }
 
+#[test]
+fn list_entries_handles_more_than_500_entries() {
+    let tmp = TempVault::new("over-500");
+    let vault = Vault::open(&tmp.path).unwrap();
+
+    // Seed 510 entries directly via save_entry_with_frontmatter + fast disk writes + rebuild_index.
+    let entries_dir = vault.root().join("entries/daily/2026/11");
+    fs::create_dir_all(&entries_dir).unwrap();
+    for i in 0..510 {
+        let mut fm = EntryFrontmatter::new(format!("Bulk Note {i:03}"));
+        fm.notebook_id = Some("daily".into());
+        let raw = serialize_entry(&fm, &format!("Body line for entry {i}.")).unwrap();
+        let file = entries_dir.join(format!("2026-11-15-bulk-note-{i:03}.md"));
+        fs::write(file, raw).unwrap();
+    }
+
+    let rebuilt = vault.rebuild_index().unwrap();
+    assert_eq!(rebuilt, 510);
+
+    let all = vault.list_entries(None, None, None, None).unwrap();
+    assert_eq!(all.len(), 510);
+
+    let capped = vault.list_entries(None, None, Some(25), Some(10)).unwrap();
+    assert_eq!(capped.len(), 25);
+}
+
+#[test]
+fn incremental_open_syncs_external_add_modify_delete() {
+    let tmp = TempVault::new("incremental-sync");
+    let (id_a, path_a, path_b);
+    {
+        let vault = Vault::open(&tmp.path).unwrap();
+        let a = vault
+            .save_entry(SaveEntryRequest {
+                id: None,
+                title: "Entry Alpha".into(),
+                date: Some(Utc.with_ymd_and_hms(2026, 11, 10, 9, 0, 0).unwrap()),
+                notebook_id: Some("daily".into()),
+                tags: vec![],
+                mood: None,
+                starred: false,
+                weather: None,
+                location: None,
+                stamps: vec![],
+                photos: vec![],
+                audio: vec![],
+                body: "Original alpha text.".into(),
+            })
+            .unwrap();
+        let b = vault
+            .save_entry(SaveEntryRequest {
+                id: None,
+                title: "Entry Beta".into(),
+                date: Some(Utc.with_ymd_and_hms(2026, 11, 11, 9, 0, 0).unwrap()),
+                notebook_id: Some("daily".into()),
+                tags: vec![],
+                mood: None,
+                starred: false,
+                weather: None,
+                location: None,
+                stamps: vec![],
+                photos: vec![],
+                audio: vec![],
+                body: "Beta text to delete.".into(),
+            })
+            .unwrap();
+        id_a = a.id;
+        path_a = vault.root().join(&a.path);
+        path_b = vault.root().join(&b.path);
+    }
+
+    // Mutate A, delete B, and add C externally while vault is closed.
+    let mut fm_a = parse_entry_file(&fs::read_to_string(&path_a).unwrap(), "a.md")
+        .unwrap()
+        .frontmatter;
+    fm_a.updated_at = Utc::now();
+    let new_a = serialize_entry(&fm_a, "Externally revised cardamom tea reflection.").unwrap();
+    fs::write(&path_a, new_a).unwrap();
+
+    fs::remove_file(&path_b).unwrap();
+
+    let fm_c = EntryFrontmatter::new("External Gamma");
+    let path_c = tmp
+        .path
+        .join("entries/daily/2026/11/2026-11-12-external-gamma.md");
+    fs::create_dir_all(path_c.parent().unwrap()).unwrap();
+    fs::write(
+        &path_c,
+        serialize_entry(&fm_c, "Freshly synced from external tool.").unwrap(),
+    )
+    .unwrap();
+
+    let reopened = Vault::open(&tmp.path).unwrap();
+    let entries = reopened.list_entries(None, None, None, None).unwrap();
+    assert_eq!(entries.len(), 2);
+    assert!(entries.iter().any(|e| e.id == id_a));
+    assert!(entries.iter().any(|e| e.title == "External Gamma"));
+
+    let hits = reopened
+        .search_entries(&SearchQuery::text("cardamom"))
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].summary.id, id_a);
+
+    // Calling incremental sync again immediately should do 0 work.
+    assert_eq!(reopened.sync_index_incremental().unwrap(), 0);
+}
+
+#[test]
+fn fts5_escapes_html_in_snippets_and_handles_hyphenated_dates() {
+    let tmp = TempVault::new("fts-xss-date");
+    let vault = Vault::open(&tmp.path).unwrap();
+
+    vault
+        .save_entry(SaveEntryRequest {
+            id: None,
+            title: "Solstice Ledger".into(),
+            date: Some(Utc.with_ymd_and_hms(2026, 11, 15, 10, 0, 0).unwrap()),
+            notebook_id: Some("daily".into()),
+            tags: vec!["Botany".into()],
+            mood: Some("quiet".into()),
+            starred: false,
+            weather: None,
+            location: None,
+            stamps: vec![],
+            photos: vec![],
+            audio: vec![],
+            body: "Logged <script>alert(1)</script> on 2026-11-15 during monsoon rain.".into(),
+        })
+        .unwrap();
+
+    vault
+        .save_entry(SaveEntryRequest {
+            id: None,
+            title: "Second Tag Case".into(),
+            date: None,
+            notebook_id: Some("daily".into()),
+            tags: vec!["botany".into()],
+            mood: None,
+            starred: false,
+            weather: None,
+            location: None,
+            stamps: vec![],
+            photos: vec![],
+            audio: vec![],
+            body: "Plain moss notes.".into(),
+        })
+        .unwrap();
+
+    // Hyphenated date search must not parse `-11` as FTS5 NOT 11.
+    let date_hits = vault
+        .search_entries(&SearchQuery::text("2026-11-15"))
+        .unwrap();
+    assert_eq!(date_hits.len(), 1);
+    assert!(!date_hits[0].highlighted_snippet.contains("<script>"));
+    assert!(date_hits[0].highlighted_snippet.contains("&lt;script&gt;"));
+    assert!(date_hits[0].highlighted_snippet.contains("<mark>"));
+
+    // Title/tag match not present in body still highlights via fallback column.
+    let tag_hits = vault.search_entries(&SearchQuery::text("Botany")).unwrap();
+    assert_eq!(tag_hits.len(), 2);
+    assert!(tag_hits.iter().all(|h| h
+        .highlighted_snippet
+        .to_ascii_lowercase()
+        .contains("<mark>botany</mark>")));
+
+    // Case-insensitive tag grouping combines "Botany" and "botany".
+    let tags = vault.list_tags().unwrap();
+    assert_eq!(tags.len(), 1);
+    assert_eq!(tags[0].count, 2);
+}
+
+#[test]
+fn render_html_preview_sanitizes_raw_html_and_unsafe_urls() {
+    let md = "\
+Hello <script>alert(1)</script> and <img src=x onerror=alert(1)>
+
+[Evil](javascript:alert(1))
+![BadImg](data:text/html,<script>alert(1)</script>)
+[Good](https://example.com/notes)
+[[Target Note|Label <b>Bold</b>]]";
+
+    let html = render_html_preview(md);
+    assert!(!html.contains("<script>"));
+    assert!(!html.contains("<img src=x"));
+    assert!(!html.contains("javascript:"));
+    assert!(!html.contains("data:text/html"));
+    assert!(html.contains("&lt;script&gt;"));
+    assert!(html.contains("&lt;img src=x onerror=alert(1)&gt;"));
+    assert!(html.contains("href=\"#blocked\""));
+    assert!(html.contains("src=\"#blocked\""));
+    assert!(html.contains("href=\"https://example.com/notes\""));
+    assert!(html.contains("Label &lt;b&gt;Bold&lt;/b&gt;"));
+}
+
+#[test]
+fn editing_entry_removes_deleted_wikilinks_from_backlinks() {
+    let tmp = TempVault::new("backlink-sync");
+    let vault = Vault::open(&tmp.path).unwrap();
+
+    let target = vault
+        .save_entry(SaveEntryRequest {
+            id: None,
+            title: "Target Hearth".into(),
+            date: None,
+            notebook_id: None,
+            tags: vec![],
+            mood: None,
+            starred: false,
+            weather: None,
+            location: None,
+            stamps: vec![],
+            photos: vec![],
+            audio: vec![],
+            body: "Target body.".into(),
+        })
+        .unwrap();
+
+    let mut fm = EntryFrontmatter::new("Linker Note");
+    let saved = vault
+        .save_entry_with_frontmatter(fm.clone(), "Linking to [[Target Hearth]].")
+        .unwrap();
+    assert_eq!(vault.get_backlinks(target.id).unwrap().len(), 1);
+
+    fm.id = saved.id;
+    vault
+        .save_entry_with_frontmatter(fm, "Removed the link now.")
+        .unwrap();
+    assert_eq!(vault.get_backlinks(target.id).unwrap().len(), 0);
+}
+
 /// Build a valid JPEG APP1 EXIF segment (little-endian TIFF) with DateTimeOriginal & GPS.
 fn inject_minimal_exif_into_jpeg(jpeg: &[u8]) -> Vec<u8> {
     assert!(jpeg.starts_with(&[0xFF, 0xD8]));

@@ -21,7 +21,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; img-src 'self' vault: http://vault.localhost asset: https://asset.localhost data: blob:; media-src 'self' vault: http://vault.localhost asset: https://asset.localhost blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' ipc: http://ipc.localhost vault: http://vault.localhost"
+      "csp": "default-src 'self'; script-src 'self'; img-src 'self' vault: http://vault.localhost asset: https://asset.localhost data: blob:; media-src 'self' vault: http://vault.localhost asset: https://asset.localhost blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost vault: http://vault.localhost"
     }
   },
   "bundle": {

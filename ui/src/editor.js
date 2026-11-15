@@ -155,8 +155,17 @@ function formatEntryDateLine(isoDate, body) {
 
 function autoSizeTextarea(el) {
   if (!el) return;
+  const scroller = el.closest(".sanctuary-main") || document.scrollingElement;
+  const prevScroll = scroller ? scroller.scrollTop : 0;
+  const prevWinY = window.scrollY;
   el.style.height = "auto";
   el.style.height = `${Math.max(480, el.scrollHeight)}px`;
+  if (scroller && scroller.scrollTop !== prevScroll) {
+    scroller.scrollTop = prevScroll;
+  }
+  if (window.scrollY !== prevWinY) {
+    window.scrollTo(window.scrollX, prevWinY);
+  }
 }
 
 function deriveFallbackTitle(body, dateIso) {
@@ -251,13 +260,24 @@ export function renderEntryEditor(container, state, callbacks = {}) {
   let mode = state.editorMode === "read" ? "read" : "write";
   let dirty = false;
   let saving = false;
+  let editVersion = 0;
+  let savedVersion = 0;
+  let inFlightSave = null;
+  let pendingStructuralRefresh = false;
+  let disposed = false;
   let saveTimer = null;
+  let ledgerTimer = null;
   let deleteConfirmOpen = false;
   let coverPopoverOpen = false;
+  let coverPopoverAbort = null;
   let promptDismissed = false;
   let activeInlineTool = null; // null | "voice" | "template" | "link" | "stamp"
+  let activeRecorderCard = null;
+  let activeWaveformRibbons = [];
   let slashState = null; // { query, start, end, selectedIndex }
   let locationEditing = false;
+  let refocusTagInput = false;
+  const lifecycleAbort = new AbortController();
 
   const coverKey = draft.id || "__draft__";
   let coverAsset = sessionEntryCovers.get(coverKey) || null;
@@ -370,16 +390,42 @@ export function renderEntryEditor(container, state, callbacks = {}) {
     }
   };
 
-  const updateDatelineAndLedger = () => {
+  const destroyActiveRecorder = () => {
+    if (activeRecorderCard && typeof activeRecorderCard.destroy === "function") {
+      activeRecorderCard.destroy();
+    }
+    activeRecorderCard = null;
+  };
+
+  const destroyActiveWaveforms = () => {
+    for (const r of activeWaveformRibbons) {
+      if (r && typeof r.destroy === "function") {
+        r.destroy();
+      }
+    }
+    activeWaveformRibbons = [];
+  };
+
+  const updateDatelineAndLedger = (immediate = false) => {
     if (datelineTextEl) {
       datelineTextEl.textContent = formatEntryDateLine(draft.date, draft.body);
     }
-    if (ledgerContainer) {
-      renderLedger();
+    if (immediate) {
+      if (ledgerTimer) {
+        clearTimeout(ledgerTimer);
+        ledgerTimer = null;
+      }
+      if (ledgerContainer) renderLedger();
+      if (connectionsContainer) renderConnections();
+      return;
     }
-    if (connectionsContainer) {
-      renderConnections();
-    }
+    if (ledgerTimer) clearTimeout(ledgerTimer);
+    ledgerTimer = setTimeout(() => {
+      ledgerTimer = null;
+      if (disposed) return;
+      if (ledgerContainer) renderLedger();
+      if (connectionsContainer) renderConnections();
+    }, 260);
   };
 
   const performSave = async () => {
@@ -387,46 +433,81 @@ export function renderEntryEditor(container, state, callbacks = {}) {
       clearTimeout(saveTimer);
       saveTimer = null;
     }
-    if (saving) return;
-    saving = true;
-    updateSaveIndicator();
-    try {
-      const saved = await callbacks.onSaveEntry?.(buildSavePayload());
-      if (saved) {
-        const hadNoId = !draft.id;
-        draft.id = saved.id;
-        draft.path = saved.path || draft.path;
-        if (Array.isArray(saved.backlinks)) {
-          draft.backlinks = saved.backlinks;
-        }
-        if (hadNoId && coverAsset) {
-          sessionEntryCovers.delete("__draft__");
-          sessionEntryCovers.set(saved.id, coverAsset);
-        }
-      }
-      dirty = false;
-    } catch (err) {
-      if (saveIndicatorEl) {
-        saveIndicatorEl.classList.add("is-dirty");
-        saveIndicatorEl.textContent = err?.message || "Save failed";
-      }
-      saving = false;
-      return;
+    if (inFlightSave) {
+      await inFlightSave;
+      if (editVersion <= savedVersion) return;
     }
-    saving = false;
-    updateSaveIndicator();
-    updateDatelineAndLedger();
+    if (editVersion === savedVersion && !dirty) return;
+
+    const runSaveLoop = async () => {
+      while (editVersion > savedVersion || (dirty && !saving)) {
+        const targetVersion = editVersion;
+        const structural = pendingStructuralRefresh || !draft.id;
+        pendingStructuralRefresh = false;
+        saving = true;
+        updateSaveIndicator();
+        try {
+          const saved = await callbacks.onSaveEntry?.(buildSavePayload(), {
+            structural,
+          });
+          if (saved) {
+            const hadNoId = !draft.id;
+            draft.id = saved.id;
+            draft.path = saved.path || draft.path;
+            if (Array.isArray(saved.backlinks)) {
+              draft.backlinks = saved.backlinks;
+            }
+            if (hadNoId && coverAsset) {
+              sessionEntryCovers.delete("__draft__");
+              sessionEntryCovers.set(saved.id, coverAsset);
+            }
+          }
+          savedVersion = targetVersion;
+          dirty = editVersion > savedVersion;
+        } catch (err) {
+          saving = false;
+          if (saveIndicatorEl) {
+            saveIndicatorEl.classList.add("is-dirty");
+            saveIndicatorEl.textContent = err?.message || "Save failed";
+          }
+          throw err;
+        }
+        saving = false;
+        updateSaveIndicator();
+        if (!disposed) {
+          updateDatelineAndLedger(true);
+        }
+      }
+    };
+
+    inFlightSave = runSaveLoop().finally(() => {
+      inFlightSave = null;
+    });
+    return inFlightSave;
   };
 
-  const markDirtyAndScheduleSave = () => {
+  const markDirtyAndScheduleSave = (structural = false) => {
+    editVersion += 1;
     dirty = true;
+    if (structural) pendingStructuralRefresh = true;
     updateSaveIndicator();
-    updateDatelineAndLedger();
+    updateDatelineAndLedger(false);
+    if (disposed) return;
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
-      performSave();
+      performSave().catch(() => {});
     }, 750);
   };
+
+  window.addEventListener(
+    "beforeunload",
+    () => {
+      if (editVersion > savedVersion || dirty) {
+        performSave().catch(() => {});
+      }
+    },
+    { signal: lifecycleAbort.signal }
+  );
 
   // Hidden photo file picker
   const photoInput = document.createElement("input");
@@ -454,7 +535,7 @@ export function renderEntryEditor(container, state, callbacks = {}) {
       }
     }
     renderPhotosSection();
-    markDirtyAndScheduleSave();
+    markDirtyAndScheduleSave(true);
   };
 
   photoInput.addEventListener("change", async () => {
@@ -543,7 +624,7 @@ export function renderEntryEditor(container, state, callbacks = {}) {
     }
     nbSelect.addEventListener("change", () => {
       draft.notebook_id = nbSelect.value;
-      markDirtyAndScheduleSave();
+      markDirtyAndScheduleSave(true);
     });
 
     left.append(prevBtn, nextBtn, nbSelect);
@@ -599,7 +680,7 @@ export function renderEntryEditor(container, state, callbacks = {}) {
     starBtn.addEventListener("click", () => {
       draft.starred = !draft.starred;
       renderTopbar();
-      markDirtyAndScheduleSave();
+      markDirtyAndScheduleSave(true);
     });
 
     const coverBtn = document.createElement("button");
@@ -640,6 +721,7 @@ export function renderEntryEditor(container, state, callbacks = {}) {
         confirmBtn.className = "topbar-danger-btn";
         confirmBtn.textContent = "Delete?";
         confirmBtn.addEventListener("click", async () => {
+          if (draft.id) sessionEntryCovers.delete(draft.id);
           await callbacks.onDeleteEntry?.(draft.id);
         });
         const cancelDelBtn = document.createElement("button");
@@ -656,6 +738,11 @@ export function renderEntryEditor(container, state, callbacks = {}) {
     }
 
     topbar.append(left, right);
+
+    if (coverPopoverAbort) {
+      coverPopoverAbort.abort();
+      coverPopoverAbort = null;
+    }
 
     if (coverPopoverOpen) {
       const pop = document.createElement("div");
@@ -695,6 +782,28 @@ export function renderEntryEditor(container, state, callbacks = {}) {
         pop.appendChild(clearCoverBtn);
       }
       topbar.appendChild(pop);
+
+      coverPopoverAbort = new AbortController();
+      const closePop = () => {
+        coverPopoverOpen = false;
+        renderTopbar();
+      };
+      document.addEventListener(
+        "pointerdown",
+        (ev) => {
+          if (!pop.contains(ev.target) && !coverBtn.contains(ev.target)) {
+            closePop();
+          }
+        },
+        { signal: coverPopoverAbort.signal }
+      );
+      window.addEventListener(
+        "keydown",
+        (ev) => {
+          if (ev.key === "Escape") closePop();
+        },
+        { signal: coverPopoverAbort.signal }
+      );
     }
   };
 
@@ -775,7 +884,10 @@ export function renderEntryEditor(container, state, callbacks = {}) {
       locInput.className = "meta-inline-input";
       locInput.placeholder = "City or place";
       locInput.value = draft.location?.place_name || "";
+      let locCommitted = false;
       const commitLoc = () => {
+        if (locCommitted) return;
+        locCommitted = true;
         const val = locInput.value.trim();
         locationEditing = false;
         if (val) {
@@ -798,6 +910,7 @@ export function renderEntryEditor(container, state, callbacks = {}) {
           ev.preventDefault();
           commitLoc();
         } else if (ev.key === "Escape") {
+          locCommitted = true;
           locationEditing = false;
           renderMetaInline();
         }
@@ -918,7 +1031,7 @@ export function renderEntryEditor(container, state, callbacks = {}) {
       rem.addEventListener("click", () => {
         draft.tags = draft.tags.filter((t) => t !== tag);
         renderMetaInline();
-        markDirtyAndScheduleSave();
+        markDirtyAndScheduleSave(true);
       });
       tagItem.append(label, rem);
       metaInlineEl.appendChild(tagItem);
@@ -929,7 +1042,7 @@ export function renderEntryEditor(container, state, callbacks = {}) {
     tagInput.className = "meta-tag-input";
     tagInput.placeholder = "+ tag";
     tagInput.setAttribute("aria-label", "Add tag");
-    const addTagValue = () => {
+    const addTagValue = (keepFocus = false) => {
       const cleaned = tagInput.value
         .replace(/^#+/, "")
         .replace(/,/g, "")
@@ -938,18 +1051,23 @@ export function renderEntryEditor(container, state, callbacks = {}) {
       tagInput.value = "";
       if (cleaned && !draft.tags.includes(cleaned)) {
         draft.tags.push(cleaned);
+        refocusTagInput = keepFocus;
         renderMetaInline();
-        markDirtyAndScheduleSave();
+        markDirtyAndScheduleSave(true);
       }
     };
     tagInput.addEventListener("keydown", (ev) => {
       if (ev.key === "Enter" || ev.key === ",") {
         ev.preventDefault();
-        addTagValue();
+        addTagValue(true);
       }
     });
-    tagInput.addEventListener("blur", addTagValue);
+    tagInput.addEventListener("blur", () => addTagValue(false));
     metaInlineEl.appendChild(tagInput);
+    if (refocusTagInput) {
+      refocusTagInput = false;
+      queueMicrotask(() => tagInput.focus());
+    }
   };
 
   // 3. Blank-Entry-Only Contextual Prompt
@@ -1190,6 +1308,7 @@ export function renderEntryEditor(container, state, callbacks = {}) {
   };
 
   const renderInlineTool = () => {
+    destroyActiveRecorder();
     inlineToolContainer.innerHTML = "";
     if (!activeInlineTool || mode !== "write") return;
 
@@ -1200,13 +1319,14 @@ export function renderEntryEditor(container, state, callbacks = {}) {
           activeInlineTool = null;
           renderInlineTool();
           renderVoiceSection();
-          markDirtyAndScheduleSave();
+          markDirtyAndScheduleSave(true);
         },
         () => {
           activeInlineTool = null;
           renderInlineTool();
         }
       );
+      activeRecorderCard = recorder;
       inlineToolContainer.appendChild(recorder);
       return;
     }
@@ -1597,7 +1717,7 @@ export function renderEntryEditor(container, state, callbacks = {}) {
         onRemove: (photoId) => {
           draft.photos = draft.photos.filter((p) => p.id !== photoId);
           renderPhotosSection();
-          markDirtyAndScheduleSave();
+          markDirtyAndScheduleSave(true);
         },
         onUpdateCaption: (photoId, newCaption) => {
           const target = draft.photos.find((p) => p.id === photoId);
@@ -1613,6 +1733,7 @@ export function renderEntryEditor(container, state, callbacks = {}) {
   };
 
   const renderVoiceSection = () => {
+    destroyActiveWaveforms();
     voiceContainer.innerHTML = "";
     if (draft.audio.length === 0) {
       voiceContainer.hidden = true;
@@ -1657,13 +1778,13 @@ export function renderEntryEditor(container, state, callbacks = {}) {
     const stack = document.createElement("div");
     stack.className = "voice-ribbons-stack";
     for (const memo of draft.audio) {
-      stack.appendChild(
-        createWaveformPlayer(memo, (memoId) => {
-          draft.audio = draft.audio.filter((m) => m.id !== memoId);
-          renderVoiceSection();
-          markDirtyAndScheduleSave();
-        })
-      );
+      const player = createWaveformPlayer(memo, (memoId) => {
+        draft.audio = draft.audio.filter((m) => m.id !== memoId);
+        renderVoiceSection();
+        markDirtyAndScheduleSave(true);
+      });
+      activeWaveformRibbons.push(player);
+      stack.appendChild(player);
     }
     voiceContainer.appendChild(stack);
   };
@@ -1847,10 +1968,11 @@ export function renderEntryEditor(container, state, callbacks = {}) {
 
   return {
     flushSave: async () => {
-      if (dirty) {
+      if (editVersion > savedVersion || dirty || inFlightSave) {
         await performSave();
       }
     },
+    isDirty: () => editVersion > savedVersion || dirty || Boolean(inFlightSave),
     toggleMode: () => {
       mode = mode === "write" ? "read" : "write";
       callbacks.onModeChange?.(mode);
@@ -1861,6 +1983,24 @@ export function renderEntryEditor(container, state, callbacks = {}) {
     },
     focusEditor: () => {
       textareaEl?.focus();
+    },
+    destroy: () => {
+      disposed = true;
+      if (saveTimer) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+      }
+      if (ledgerTimer) {
+        clearTimeout(ledgerTimer);
+        ledgerTimer = null;
+      }
+      if (coverPopoverAbort) {
+        coverPopoverAbort.abort();
+        coverPopoverAbort = null;
+      }
+      lifecycleAbort.abort();
+      destroyActiveRecorder();
+      destroyActiveWaveforms();
     },
   };
 }

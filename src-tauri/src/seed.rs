@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use chrono::{Datelike, Days, NaiveDate, TimeZone, Utc};
+use chrono::{Datelike, Days, Local, NaiveDate, TimeZone, Utc};
 use journal_core::Vault;
 use journal_types::{
     CreateNotebookRequest, EntryFrontmatter, GeoLocation, PolaroidMeta, StampPlacement, WeatherInfo,
@@ -47,14 +47,14 @@ pub fn seed_demo_vault(vault: &Vault) -> Result<SeedSummary> {
         nb.id
     };
 
-    let existing_entries = vault.list_entries(None, None, Some(500), None)?;
+    let existing_entries = vault.list_entries(None, None, None, None)?;
     let has_title = |title: &str| {
         existing_entries
             .iter()
             .any(|e| e.title.eq_ignore_ascii_case(title))
     };
 
-    let today = Utc::now().date_naive();
+    let today = Local::now().date_naive();
     let one_year_ago = NaiveDate::from_ymd_opt(today.year() - 1, today.month(), today.day())
         .or_else(|| NaiveDate::from_ymd_opt(today.year() - 1, today.month(), 28))
         .unwrap_or(today);

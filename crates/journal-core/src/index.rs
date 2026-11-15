@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
@@ -10,7 +10,7 @@ use rusqlite::{params, params_from_iter, types::Value, Connection, OptionalExten
 use uuid::Uuid;
 
 use crate::error::{Result, VaultError};
-use crate::markdown::{extract_wikilinks, slugify};
+use crate::markdown::{escape_html_text, extract_wikilinks, slugify};
 
 /// Initialize all SQLite tables and FTS5 virtual table if they do not exist.
 pub fn init_schema(conn: &Connection) -> Result<()> {
@@ -18,6 +18,8 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         r#"
         PRAGMA journal_mode = WAL;
         PRAGMA synchronous = NORMAL;
+        PRAGMA busy_timeout = 5000;
+        PRAGMA temp_store = MEMORY;
         PRAGMA foreign_keys = ON;
 
         CREATE TABLE IF NOT EXISTS notebooks (
@@ -58,13 +60,19 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             weather_json TEXT,
             location_json TEXT,
             stamps_json TEXT NOT NULL DEFAULT '[]',
-            place_name TEXT
+            place_name TEXT,
+            file_mtime INTEGER NOT NULL DEFAULT 0,
+            file_size INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE INDEX IF NOT EXISTS idx_entries_date ON entries(date DESC);
         CREATE INDEX IF NOT EXISTS idx_entries_notebook ON entries(notebook_id, date DESC);
         CREATE INDEX IF NOT EXISTS idx_entries_ymd ON entries(year, month, day);
+        CREATE INDEX IF NOT EXISTS idx_entries_mdy ON entries(month, day, year);
+        CREATE INDEX IF NOT EXISTS idx_entries_date_ymd ON entries(date_ymd);
         CREATE INDEX IF NOT EXISTS idx_entries_slug ON entries(slug);
+        CREATE INDEX IF NOT EXISTS idx_entries_slug_nocase ON entries(LOWER(slug));
+        CREATE INDEX IF NOT EXISTS idx_entries_title_nocase ON entries(LOWER(title));
         CREATE INDEX IF NOT EXISTS idx_entries_source ON entries(source, source_id);
 
         CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
@@ -81,6 +89,7 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             PRIMARY KEY (entry_id, tag)
         );
         CREATE INDEX IF NOT EXISTS idx_entry_tags_tag ON entry_tags(tag);
+        CREATE INDEX IF NOT EXISTS idx_entry_tags_tag_nocase ON entry_tags(LOWER(tag), entry_id);
 
         CREATE TABLE IF NOT EXISTS entry_links (
             source_id TEXT NOT NULL,
@@ -88,8 +97,32 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             PRIMARY KEY (source_id, target_ref)
         );
         CREATE INDEX IF NOT EXISTS idx_entry_links_target ON entry_links(target_ref);
+        CREATE INDEX IF NOT EXISTS idx_entry_links_target_nocase ON entry_links(LOWER(target_ref), source_id);
         "#,
     )?;
+
+    ensure_column(conn, "entries", "file_mtime", "INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(conn, "entries", "file_size", "INTEGER NOT NULL DEFAULT 0")?;
+    Ok(())
+}
+
+fn ensure_column(conn: &Connection, table: &str, column: &str, definition: &str) -> Result<()> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let mut rows = stmt.query([])?;
+    let mut exists = false;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        if name == column {
+            exists = true;
+            break;
+        }
+    }
+    if !exists {
+        conn.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -116,6 +149,16 @@ pub fn sync_notebooks_table(conn: &Connection, notebooks: &[Notebook]) -> Result
 
 /// Insert or update one entry across `entries`, `entries_fts`, `entry_tags`, and `entry_links`.
 pub fn upsert_entry(conn: &Connection, entry: &Entry) -> Result<()> {
+    upsert_entry_with_stat(conn, entry, 0, 0)
+}
+
+/// Insert or update one entry along with its source file `(mtime_ns, size)` fingerprint.
+pub fn upsert_entry_with_stat(
+    conn: &Connection,
+    entry: &Entry,
+    file_mtime: i64,
+    file_size: i64,
+) -> Result<()> {
     let id_str = entry.id.to_string();
     let slug = slug_from_path_or_title(&entry.path, &entry.frontmatter.title);
     let summary = entry.to_summary();
@@ -142,35 +185,62 @@ pub fn upsert_entry(conn: &Connection, entry: &Entry) -> Result<()> {
         .as_ref()
         .map(|l| l.place_name.clone());
 
-    // Remove previous FTS row before replacing so rowid stays aligned.
-    if let Some(old_rowid) = conn
+    // If a different entry ID previously occupied `entry.path`, clean up all its index rows first.
+    if let Some((other_rowid, other_id)) = conn
         .query_row(
-            "SELECT rowid FROM entries WHERE id = ?1",
-            params![&id_str],
-            |row| row.get::<_, i64>(0),
+            "SELECT rowid, id FROM entries WHERE path = ?1 AND id != ?2",
+            params![&entry.path, &id_str],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
         )
         .optional()?
     {
-        conn.execute(
-            "DELETE FROM entries_fts WHERE rowid = ?1",
-            params![old_rowid],
-        )?;
+        delete_index_rows(conn, other_rowid, &other_id)?;
     }
 
     conn.execute(
-        "INSERT OR REPLACE INTO entries (
+        "INSERT INTO entries (
             id, slug, title, date, date_ymd, year, month, day, updated_at,
             notebook_id, mood, starred, source, source_id, path, snippet,
             word_count, reading_minutes, cover_photo, has_audio, has_photos,
             photo_count, audio_count, tags_json, weather_json, location_json,
-            stamps_json, place_name
+            stamps_json, place_name, file_mtime, file_size
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
             ?10, ?11, ?12, ?13, ?14, ?15, ?16,
             ?17, ?18, ?19, ?20, ?21,
             ?22, ?23, ?24, ?25, ?26,
-            ?27, ?28
-        )",
+            ?27, ?28, ?29, ?30
+        )
+        ON CONFLICT(id) DO UPDATE SET
+            slug = excluded.slug,
+            title = excluded.title,
+            date = excluded.date,
+            date_ymd = excluded.date_ymd,
+            year = excluded.year,
+            month = excluded.month,
+            day = excluded.day,
+            updated_at = excluded.updated_at,
+            notebook_id = excluded.notebook_id,
+            mood = excluded.mood,
+            starred = excluded.starred,
+            source = excluded.source,
+            source_id = excluded.source_id,
+            path = excluded.path,
+            snippet = excluded.snippet,
+            word_count = excluded.word_count,
+            reading_minutes = excluded.reading_minutes,
+            cover_photo = excluded.cover_photo,
+            has_audio = excluded.has_audio,
+            has_photos = excluded.has_photos,
+            photo_count = excluded.photo_count,
+            audio_count = excluded.audio_count,
+            tags_json = excluded.tags_json,
+            weather_json = excluded.weather_json,
+            location_json = excluded.location_json,
+            stamps_json = excluded.stamps_json,
+            place_name = excluded.place_name,
+            file_mtime = excluded.file_mtime,
+            file_size = excluded.file_size",
         params![
             id_str,
             slug,
@@ -200,11 +270,18 @@ pub fn upsert_entry(conn: &Connection, entry: &Entry) -> Result<()> {
             location_json,
             stamps_json,
             place_name,
+            file_mtime,
+            file_size,
         ],
     )?;
 
-    let rowid = conn.last_insert_rowid();
+    let rowid: i64 = conn.query_row(
+        "SELECT rowid FROM entries WHERE id = ?1",
+        params![&id_str],
+        |row| row.get(0),
+    )?;
     let tags_joined = entry.frontmatter.tags.join(" ");
+    conn.execute("DELETE FROM entries_fts WHERE rowid = ?1", params![rowid])?;
     conn.execute(
         "INSERT INTO entries_fts (rowid, title, body, tags, place_name, mood)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -260,6 +337,20 @@ pub fn upsert_entry(conn: &Connection, entry: &Entry) -> Result<()> {
     Ok(())
 }
 
+fn delete_index_rows(conn: &Connection, rowid: i64, id_str: &str) -> Result<()> {
+    conn.execute("DELETE FROM entries_fts WHERE rowid = ?1", params![rowid])?;
+    conn.execute(
+        "DELETE FROM entry_tags WHERE entry_id = ?1",
+        params![id_str],
+    )?;
+    conn.execute(
+        "DELETE FROM entry_links WHERE source_id = ?1",
+        params![id_str],
+    )?;
+    conn.execute("DELETE FROM entries WHERE id = ?1", params![id_str])?;
+    Ok(())
+}
+
 /// Remove an entry from all SQLite index tables by UUID.
 pub fn delete_entry_from_index(conn: &Connection, id: Uuid) -> Result<Option<String>> {
     let id_str = id.to_string();
@@ -275,18 +366,79 @@ pub fn delete_entry_from_index(conn: &Connection, id: Uuid) -> Result<Option<Str
         return Ok(None);
     };
 
-    conn.execute("DELETE FROM entries_fts WHERE rowid = ?1", params![rowid])?;
-    conn.execute(
-        "DELETE FROM entry_tags WHERE entry_id = ?1",
-        params![&id_str],
-    )?;
-    conn.execute(
-        "DELETE FROM entry_links WHERE source_id = ?1",
-        params![&id_str],
-    )?;
-    conn.execute("DELETE FROM entries WHERE id = ?1", params![&id_str])?;
-
+    delete_index_rows(conn, rowid, &id_str)?;
     Ok(Some(path))
+}
+
+/// Remove an entry from all SQLite index tables by vault-relative path.
+pub fn delete_entry_by_path(conn: &Connection, rel_path: &str) -> Result<()> {
+    if let Some((rowid, id_str)) = conn
+        .query_row(
+            "SELECT rowid, id FROM entries WHERE path = ?1",
+            params![rel_path],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?
+    {
+        delete_index_rows(conn, rowid, &id_str)?;
+    }
+    Ok(())
+}
+
+/// Return indexed `path -> (file_mtime, file_size)` map for incremental startup sync.
+pub fn list_indexed_files(conn: &Connection) -> Result<HashMap<String, (i64, i64)>> {
+    let mut stmt = conn.prepare("SELECT path, file_mtime, file_size FROM entries")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            (row.get::<_, i64>(1)?, row.get::<_, i64>(2)?),
+        ))
+    })?;
+    let mut map = HashMap::new();
+    for r in rows {
+        let (path, stat) = r?;
+        map.insert(path, stat);
+    }
+    Ok(map)
+}
+
+/// List notebooks from SQLite enriched with live entry counts in a single query.
+pub fn list_notebooks_with_counts(conn: &Connection) -> Result<Vec<Notebook>> {
+    let mut stmt = conn.prepare(
+        "SELECT n.id, n.name, n.description, n.cover_asset, n.accent_color,
+                n.created_at, n.is_default, COUNT(e.id) AS entry_count
+         FROM notebooks n
+         LEFT JOIN entries e ON COALESCE(e.notebook_id, 'daily') = n.id
+         GROUP BY n.id
+         ORDER BY n.rowid ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        let created_str: String = row.get(5)?;
+        let created_at = DateTime::parse_from_rfc3339(&created_str)
+            .map(|dt| dt.with_timezone(&Utc))
+            .map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    5,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })?;
+        Ok(Notebook {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            description: row.get(2)?,
+            cover_asset: row.get(3)?,
+            accent_color: row.get(4)?,
+            created_at,
+            is_default: row.get::<_, i64>(6)? != 0,
+            entry_count: row.get::<_, i64>(7)? as usize,
+        })
+    })?;
+    let mut notebooks = Vec::new();
+    for r in rows {
+        notebooks.push(r?);
+    }
+    Ok(notebooks)
 }
 
 /// Count entries per `notebook_id`.
@@ -334,7 +486,7 @@ pub fn list_entries(
 
     sql.push_str(" ORDER BY e.date DESC, e.updated_at DESC");
 
-    let lim = limit.unwrap_or(500) as i64;
+    let lim = limit.map(|l| l as i64).unwrap_or(-1);
     let off = offset.unwrap_or(0) as i64;
     sql.push_str(" LIMIT ? OFFSET ?");
     bind.push(Value::Integer(lim));
@@ -372,16 +524,17 @@ pub fn resolve_entry_path(
         }
     }
 
+    let like_pattern = format!("%/{}.md", escape_sql_like(&needle.to_ascii_lowercase()));
     let found: Option<(String, String)> = conn
         .query_row(
             "SELECT id, path FROM entries
              WHERE LOWER(slug) = LOWER(?1)
                 OR LOWER(title) = LOWER(?1)
                 OR path = ?1
-                OR LOWER(path) LIKE '%/' || LOWER(?1) || '.md'
+                OR LOWER(path) LIKE ?2 ESCAPE '\\'
              ORDER BY date DESC
              LIMIT 1",
-            params![needle],
+            params![needle, like_pattern],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
@@ -462,7 +615,8 @@ pub fn search_entries(conn: &Connection, query: &SearchQuery) -> Result<Vec<Sear
             "SELECT e.id, e.title, e.date, e.updated_at, e.notebook_id, e.mood, e.starred,
                     e.snippet, e.word_count, e.reading_minutes, e.path, e.cover_photo,
                     e.has_audio, e.has_photos, e.tags_json, e.weather_json, e.location_json, e.stamps_json,
-                    snippet(entries_fts, 1, '<mark>', '</mark>', '…', 24) AS hl_snippet,
+                    snippet(entries_fts, 1, char(2), char(3), '…', 24) AS body_snip,
+                    snippet(entries_fts, -1, char(2), char(3), '…', 24) AS any_snip,
                     bm25(entries_fts) AS rank
              FROM entries_fts
              JOIN entries e ON e.rowid = entries_fts.rowid
@@ -473,7 +627,8 @@ pub fn search_entries(conn: &Connection, query: &SearchQuery) -> Result<Vec<Sear
             "SELECT e.id, e.title, e.date, e.updated_at, e.notebook_id, e.mood, e.starred,
                     e.snippet, e.word_count, e.reading_minutes, e.path, e.cover_photo,
                     e.has_audio, e.has_photos, e.tags_json, e.weather_json, e.location_json, e.stamps_json,
-                    e.snippet AS hl_snippet,
+                    e.snippet AS body_snip,
+                    '' AS any_snip,
                     0.0 AS rank
              FROM entries e
              WHERE 1=1",
@@ -528,13 +683,26 @@ pub fn search_entries(conn: &Connection, query: &SearchQuery) -> Result<Vec<Sear
     bind.push(Value::Integer(offset));
 
     let mut stmt = conn.prepare(&sql)?;
+    let is_fts = fts_expr.is_some();
     let rows = stmt.query_map(params_from_iter(bind), |row| {
         let summary = row_to_entry_summary(row)?;
-        let mut highlighted_snippet: String = row.get(18)?;
-        if highlighted_snippet.trim().is_empty() {
-            highlighted_snippet = summary.snippet.clone();
-        }
-        let rank: f64 = row.get(19)?;
+        let body_snip: String = row.get(18)?;
+        let any_snip: String = row.get(19)?;
+        let highlighted_snippet = if is_fts {
+            let chosen = if body_snip.contains('\x02') {
+                body_snip
+            } else if any_snip.contains('\x02') {
+                any_snip
+            } else if !body_snip.trim().is_empty() {
+                body_snip
+            } else {
+                summary.snippet.clone()
+            };
+            format_safe_fts_snippet(&chosen)
+        } else {
+            escape_html_text(&body_snip)
+        };
+        let rank: f64 = row.get(20)?;
         Ok(SearchHit {
             summary,
             highlighted_snippet,
@@ -580,12 +748,29 @@ fn build_fts5_query(raw: &str) -> Option<String> {
     }
 }
 
-/// Return all tags sorted by descending frequency, then alphabetically.
+fn escape_sql_like(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        if matches!(ch, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn format_safe_fts_snippet(raw: &str) -> String {
+    escape_html_text(raw)
+        .replace('\x02', "<mark>")
+        .replace('\x03', "</mark>")
+}
+
+/// Return all tags sorted by descending frequency, then alphabetically (case-insensitive grouping).
 pub fn list_tags(conn: &Connection) -> Result<Vec<TagCount>> {
     let mut stmt = conn.prepare(
-        "SELECT tag, COUNT(*) AS cnt
+        "SELECT MIN(tag) AS tag, COUNT(DISTINCT entry_id) AS cnt
          FROM entry_tags
-         GROUP BY tag
+         GROUP BY LOWER(tag)
          ORDER BY cnt DESC, LOWER(tag) ASC",
     )?;
     let rows = stmt.query_map([], |row| {

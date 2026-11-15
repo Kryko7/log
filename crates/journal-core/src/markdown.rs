@@ -69,7 +69,7 @@ pub fn split_frontmatter(content: &str) -> Result<(&str, &str)> {
             .find('\n')
             .map(|rel| cursor + rel)
             .unwrap_or(bytes.len());
-        let line = content[cursor..line_end].trim_end_matches('\r');
+        let line = content[cursor..line_end].trim_end();
         if line == "---" || line == "..." {
             let yaml = &content[yaml_start..cursor];
             let mut body_start = if line_end < bytes.len() {
@@ -97,8 +97,8 @@ pub fn split_frontmatter(content: &str) -> Result<(&str, &str)> {
     ))
 }
 
-/// Parse a `.md` vault file with YAML frontmatter into an [`Entry`] with rendered `html_preview`.
-pub fn parse_entry_file(content: &str, rel_path: &str) -> Result<Entry> {
+/// Parse a `.md` vault file with YAML frontmatter into an [`Entry`] without rendering HTML.
+pub fn parse_entry_file_no_html(content: &str, rel_path: &str) -> Result<Entry> {
     let (yaml, body) = split_frontmatter(content)?;
     let mut frontmatter: EntryFrontmatter = serde_yaml::from_str(yaml)?;
 
@@ -106,7 +106,12 @@ pub fn parse_entry_file(content: &str, rel_path: &str) -> Result<Entry> {
         frontmatter.links = extract_wikilinks(body);
     }
 
-    let mut entry = Entry::new(frontmatter, body, rel_path);
+    Ok(Entry::new(frontmatter, body, rel_path))
+}
+
+/// Parse a `.md` vault file with YAML frontmatter into an [`Entry`] with rendered `html_preview`.
+pub fn parse_entry_file(content: &str, rel_path: &str) -> Result<Entry> {
+    let mut entry = parse_entry_file_no_html(content, rel_path)?;
     entry.html_preview = Some(render_html_preview(&entry.body));
     Ok(entry)
 }
@@ -229,6 +234,40 @@ pub fn render_html_preview(markdown: &str) -> String {
                 events.push(event);
             }
             Event::Text(text) if !in_code_block => pending_text.push_str(&text),
+            Event::Html(raw) | Event::InlineHtml(raw) => {
+                flush_text(&mut pending_text, &mut events);
+                events.push(Event::Text(raw));
+            }
+            Event::Start(Tag::Link {
+                link_type,
+                dest_url,
+                title,
+                id,
+            }) => {
+                flush_text(&mut pending_text, &mut events);
+                let safe_url = sanitize_markdown_url(&dest_url);
+                events.push(Event::Start(Tag::Link {
+                    link_type,
+                    dest_url: safe_url.into(),
+                    title,
+                    id,
+                }));
+            }
+            Event::Start(Tag::Image {
+                link_type,
+                dest_url,
+                title,
+                id,
+            }) => {
+                flush_text(&mut pending_text, &mut events);
+                let safe_url = sanitize_markdown_url(&dest_url);
+                events.push(Event::Start(Tag::Image {
+                    link_type,
+                    dest_url: safe_url.into(),
+                    title,
+                    id,
+                }));
+            }
             other => {
                 flush_text(&mut pending_text, &mut events);
                 events.push(other);
@@ -249,7 +288,29 @@ fn markdown_options() -> Options {
         | Options::ENABLE_FOOTNOTES
 }
 
-fn escape_html_text(s: &str) -> String {
+/// Strip control characters and reject unsafe URL schemes in Markdown links and images.
+fn sanitize_markdown_url(raw: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .filter(|c| !c.is_control() && !c.is_whitespace())
+        .collect();
+    if let Some(colon) = cleaned.find(':') {
+        let before_colon = &cleaned[..colon];
+        // Only treat as a URL scheme if `:` precedes any path/query/fragment delimiter.
+        if !before_colon.contains(['/', '?', '#']) {
+            let scheme = before_colon.to_ascii_lowercase();
+            if !matches!(
+                scheme.as_str(),
+                "http" | "https" | "mailto" | "vault" | "vault-media"
+            ) {
+                return "#blocked".to_string();
+            }
+        }
+    }
+    raw.to_string()
+}
+
+pub(crate) fn escape_html_text(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")

@@ -237,3 +237,46 @@ async fn daily_context_loads_calendar_cache_and_on_this_day_count() {
     assert_eq!(ctx.events[0].title, "Peradeniya Botanical Walk");
     assert!(ctx.suggested_prompts.len() >= 2);
 }
+
+#[test]
+fn restore_backup_rejects_unexpected_archive_prefix() {
+    let tmp = TempDir::new("reject-prefix");
+    let archive_path = tmp.path.join("crafted.tar.gz.age");
+    let restore_dir = tmp.path.join("restore-target");
+    fs::create_dir_all(&restore_dir).unwrap();
+
+    let passphrase = age::secrecy::SecretString::from("crafted-passphrase".to_string());
+    let encryptor = age::Encryptor::with_user_passphrase(passphrase);
+    let out_file = fs::File::create(&archive_path).unwrap();
+    let age_writer = encryptor.wrap_output(out_file).unwrap();
+    let gz = flate2::write::GzEncoder::new(age_writer, flate2::Compression::fast());
+    let mut tar_builder = tar::Builder::new(gz);
+
+    let payload = b"evil outside payload";
+    let mut header = tar::Header::new_gnu();
+    header.set_path(".index/evil.txt").unwrap();
+    header.set_size(payload.len() as u64);
+    header.set_mode(0o600);
+    header.set_cksum();
+    tar_builder.append(&header, &payload[..]).unwrap();
+    let gz = tar_builder.into_inner().unwrap();
+    let age_writer = gz.finish().unwrap();
+    age_writer.finish().unwrap();
+
+    let err = restore_backup(
+        &tmp.path,
+        &RestoreBackupRequest {
+            backup_id_or_path: archive_path.to_string_lossy().into_owned(),
+            passphrase: "crafted-passphrase".into(),
+            target_vault_dir: Some(restore_dir.to_string_lossy().into_owned()),
+            overwrite_existing: true,
+        },
+    )
+    .expect_err("restore_backup must reject unexpected archive path prefix");
+
+    assert!(
+        err.to_string().contains("unexpected archive path"),
+        "unexpected error: {err}"
+    );
+    assert!(!restore_dir.join(".index/evil.txt").exists());
+}

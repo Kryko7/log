@@ -10,12 +10,13 @@ mod desktop;
 mod media_gen;
 mod seed;
 
-use std::fs;
+use std::fs::{self, File};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::{bail, Context, Result};
-use chrono::{DateTime, Datelike, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Local, NaiveDate, Utc};
 use clap::{Parser, Subcommand};
 use journal_core::Vault;
 use journal_import::{import_dayone as core_import_dayone, import_notion as core_import_notion};
@@ -36,6 +37,7 @@ use tauri::{Manager, State};
 use uuid::Uuid;
 
 const EMBEDDED_MANIFEST_JSON: &str = include_str!("../../ui/assets/manifest.json");
+static ASSET_MANIFEST_CACHE: OnceLock<AssetManifest> = OnceLock::new();
 
 struct DesktopState {
     vault: Arc<Vault>,
@@ -99,7 +101,7 @@ enum Commands {
         target: PathBuf,
         #[arg(long, value_name = "ENV")]
         passphrase_env: String,
-        #[arg(long, default_value_t = true)]
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         overwrite: bool,
     },
     /// Install the binary, hicolor icons, and Freedesktop `.desktop` launcher entry.
@@ -166,7 +168,7 @@ fn resolve_asset_manifest_path() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.exists())
 }
 
-/// Pure-Rust standard Base64 decoder (RFC 4648, tolerates optional `data:...;base64,` prefix and whitespace).
+/// Pure-Rust single-pass standard Base64 decoder (RFC 4648, tolerates optional `data:...;base64,` prefix and whitespace).
 fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
     let raw = input
         .trim()
@@ -174,22 +176,30 @@ fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
         .map(|(_, data)| data)
         .unwrap_or_else(|| input.trim());
 
-    let cleaned: Vec<u8> = raw.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+    let mut out = Vec::with_capacity((raw.len() / 4) * 3);
+    let mut quad = [0u8; 4];
+    let mut qlen = 0usize;
+    let mut finished = false;
 
-    if cleaned.is_empty() {
-        return Ok(Vec::new());
-    }
-    if !cleaned.len().is_multiple_of(4) {
-        return Err("Invalid base64 payload length".to_string());
-    }
+    for byte in raw.bytes() {
+        if byte.is_ascii_whitespace() {
+            continue;
+        }
+        if finished {
+            return Err("Invalid base64 padding".to_string());
+        }
+        quad[qlen] = byte;
+        qlen += 1;
+        if qlen < 4 {
+            continue;
+        }
+        qlen = 0;
 
-    let mut out = Vec::with_capacity((cleaned.len() / 4) * 3);
-    for chunk in cleaned.as_chunks::<4>().0 {
         let mut vals = [0u8; 4];
         let mut pad = 0usize;
-        for (idx, &ch) in chunk.iter().enumerate() {
+        for (idx, &ch) in quad.iter().enumerate() {
             if ch == b'=' {
-                if idx < 2 || (idx == 2 && chunk[3] != b'=') {
+                if idx < 2 || (idx == 2 && quad[3] != b'=') {
                     return Err("Invalid base64 padding".to_string());
                 }
                 pad += 1;
@@ -206,6 +216,10 @@ fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
             }
         }
 
+        if pad > 0 {
+            finished = true;
+        }
+
         let triple = ((vals[0] as u32) << 18)
             | ((vals[1] as u32) << 12)
             | ((vals[2] as u32) << 6)
@@ -219,6 +233,11 @@ fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
             out.push((triple & 0xff) as u8);
         }
     }
+
+    if qlen != 0 {
+        return Err("Invalid base64 payload length".to_string());
+    }
+
     Ok(out)
 }
 
@@ -282,6 +301,54 @@ fn is_safe_relative(rel: &str) -> bool {
     has_normal
 }
 
+enum ParsedRange {
+    Bounds { start: u64, end: u64 },
+    Unsatisfiable,
+}
+
+fn parse_byte_range(range_hdr: &str, total: u64) -> Option<ParsedRange> {
+    let spec = range_hdr.trim().strip_prefix("bytes=")?;
+    if spec.contains(',') {
+        return None;
+    }
+    let (start_s, end_s) = spec.split_once('-')?;
+    let start_s = start_s.trim();
+    let end_s = end_s.trim();
+
+    if total == 0 {
+        return Some(ParsedRange::Unsatisfiable);
+    }
+
+    if start_s.is_empty() {
+        let suffix = end_s.parse::<u64>().ok()?;
+        if suffix == 0 {
+            return Some(ParsedRange::Unsatisfiable);
+        }
+        let start = total.saturating_sub(suffix);
+        return Some(ParsedRange::Bounds {
+            start,
+            end: total - 1,
+        });
+    }
+
+    let start = start_s.parse::<u64>().ok()?;
+    if start >= total {
+        return Some(ParsedRange::Unsatisfiable);
+    }
+
+    let end = if end_s.is_empty() {
+        total - 1
+    } else {
+        let requested_end = end_s.parse::<u64>().ok()?;
+        if requested_end < start {
+            return Some(ParsedRange::Unsatisfiable);
+        }
+        requested_end.min(total - 1)
+    };
+
+    Some(ParsedRange::Bounds { start, end })
+}
+
 fn build_vault_protocol_response(
     vault_root: &Path,
     request: &tauri::http::Request<Vec<u8>>,
@@ -295,66 +362,122 @@ fn build_vault_protocol_response(
             .unwrap();
     }
 
+    let is_head = request.method() == tauri::http::Method::HEAD;
+    if !is_head && request.method() != tauri::http::Method::GET {
+        return tauri::http::Response::builder()
+            .status(405)
+            .header("Allow", "GET, HEAD, OPTIONS")
+            .header("Content-Type", "text/plain; charset=utf-8")
+            .header("Access-Control-Allow-Origin", "*")
+            .body(b"Method not allowed".to_vec())
+            .unwrap();
+    }
+
     let decoded_path = percent_decode(request.uri().path());
-    let target = if let Some(rel) = decoded_path.strip_prefix("/vault-media/") {
-        if !is_safe_relative(rel) {
-            return error_http_response(403, b"Forbidden path".to_vec());
-        }
-        vault_root.join("media").join(rel)
+    let (base_dir, rel) = if let Some(rel) = decoded_path.strip_prefix("/vault-media/") {
+        (vault_root.join("media"), rel)
     } else if let Some(rel) = decoded_path.strip_prefix("/vault-thumbs/") {
-        if !is_safe_relative(rel) {
-            return error_http_response(403, b"Forbidden path".to_vec());
-        }
-        vault_root.join(".index").join("thumbs").join(rel)
+        (vault_root.join(".index").join("thumbs"), rel)
     } else {
         return error_http_response(404, b"Not found".to_vec());
     };
 
-    let Ok(bytes) = fs::read(&target) else {
+    if !is_safe_relative(rel) {
+        return error_http_response(403, b"Forbidden path".to_vec());
+    }
+
+    let Ok(canon_base) = fs::canonicalize(&base_dir) else {
         return error_http_response(404, b"Media file not found".to_vec());
     };
+    let Ok(canon_target) = fs::canonicalize(base_dir.join(rel)) else {
+        return error_http_response(404, b"Media file not found".to_vec());
+    };
+    if !canon_target.starts_with(&canon_base) {
+        return error_http_response(403, b"Forbidden path".to_vec());
+    }
 
-    let mime = infer_mime_type(&target);
-    let total = bytes.len();
+    let Ok(mut file) = File::open(&canon_target) else {
+        return error_http_response(404, b"Media file not found".to_vec());
+    };
+    let Ok(meta) = file.metadata() else {
+        return error_http_response(404, b"Media file not found".to_vec());
+    };
+    if !meta.is_file() {
+        return error_http_response(404, b"Media file not found".to_vec());
+    }
+
+    let mime = infer_mime_type(&canon_target);
+    let total = meta.len();
 
     if let Some(range_hdr) = request.headers().get("range").and_then(|v| v.to_str().ok()) {
-        if let Some(spec) = range_hdr.strip_prefix("bytes=") {
-            if let Some((start_s, end_s)) = spec.split_once('-') {
-                if let Ok(start) = start_s.trim().parse::<usize>() {
-                    if start < total {
-                        let end = if end_s.trim().is_empty() {
-                            total - 1
-                        } else {
-                            end_s
-                                .trim()
-                                .parse::<usize>()
-                                .unwrap_or(total - 1)
-                                .min(total - 1)
-                        };
-                        if start <= end {
-                            let slice = bytes[start..=end].to_vec();
-                            let content_range = format!("bytes {start}-{end}/{total}");
-                            return tauri::http::Response::builder()
-                                .status(206)
-                                .header("Content-Type", mime)
-                                .header("Accept-Ranges", "bytes")
-                                .header("Content-Range", content_range)
-                                .header("Access-Control-Allow-Origin", "*")
-                                .body(slice)
-                                .unwrap();
+        if let Some(parsed) = parse_byte_range(range_hdr, total) {
+            match parsed {
+                ParsedRange::Unsatisfiable => {
+                    return tauri::http::Response::builder()
+                        .status(416)
+                        .header("Content-Range", format!("bytes */{total}"))
+                        .header("Accept-Ranges", "bytes")
+                        .header("Access-Control-Allow-Origin", "*")
+                        .body(Vec::new())
+                        .unwrap();
+                }
+                ParsedRange::Bounds { start, end } => {
+                    let len = end - start + 1;
+                    let body = if is_head {
+                        Vec::new()
+                    } else {
+                        if file.seek(SeekFrom::Start(start)).is_err() {
+                            return error_http_response(500, b"Failed to seek media file".to_vec());
                         }
-                    }
+                        let cap = usize::try_from(len)
+                            .unwrap_or(16 * 1024 * 1024)
+                            .min(16 * 1024 * 1024);
+                        let mut slice = Vec::with_capacity(cap);
+                        if file.take(len).read_to_end(&mut slice).is_err() {
+                            return error_http_response(
+                                500,
+                                b"Failed to read media range".to_vec(),
+                            );
+                        }
+                        slice
+                    };
+                    let content_range = format!("bytes {start}-{end}/{total}");
+                    return tauri::http::Response::builder()
+                        .status(206)
+                        .header("Content-Type", mime)
+                        .header("Content-Length", len.to_string())
+                        .header("Accept-Ranges", "bytes")
+                        .header("Content-Range", content_range)
+                        .header("Cache-Control", "private, max-age=31536000, immutable")
+                        .header("Access-Control-Allow-Origin", "*")
+                        .body(body)
+                        .unwrap();
                 }
             }
         }
     }
 
+    let body = if is_head {
+        Vec::new()
+    } else {
+        let cap = usize::try_from(total)
+            .unwrap_or(16 * 1024 * 1024)
+            .min(16 * 1024 * 1024);
+        let mut bytes = Vec::with_capacity(cap);
+        if file.read_to_end(&mut bytes).is_err() {
+            return error_http_response(500, b"Failed to read media file".to_vec());
+        }
+        bytes
+    };
+
     tauri::http::Response::builder()
         .status(200)
         .header("Content-Type", mime)
+        .header("Content-Length", total.to_string())
         .header("Accept-Ranges", "bytes")
+        .header("Cache-Control", "private, max-age=31536000, immutable")
         .header("Access-Control-Allow-Origin", "*")
-        .body(bytes)
+        .body(body)
         .unwrap()
 }
 
@@ -371,57 +494,95 @@ fn error_http_response(status: u16, body: Vec<u8>) -> tauri::http::Response<Vec<
 // 23 Tauri v2 IPC Commands (exact snake_case contract with ui/src/ipc.js)
 // ---------------------------------------------------------------------------
 
-#[tauri::command(rename_all = "snake_case")]
-fn get_vault_stats(state: State<'_, DesktopState>) -> Result<VaultStats, String> {
-    state.vault.get_vault_stats().map_err(err_str)
+async fn spawn_vault<T, F>(vault: &Arc<Vault>, f: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(Arc<Vault>) -> Result<T, String> + Send + 'static,
+{
+    let vault = Arc::clone(vault);
+    tauri::async_runtime::spawn_blocking(move || f(vault))
+        .await
+        .map_err(|e| format!("background task failed: {e}"))?
+}
+
+fn load_asset_manifest_from_disk_or_embedded() -> Result<AssetManifest, String> {
+    if let Some(cached) = ASSET_MANIFEST_CACHE.get() {
+        return Ok(cached.clone());
+    }
+    let manifest: AssetManifest = if let Some(path) = resolve_asset_manifest_path() {
+        let raw = fs::read_to_string(&path).map_err(err_str)?;
+        serde_json::from_str(&raw).map_err(err_str)?
+    } else {
+        serde_json::from_str(EMBEDDED_MANIFEST_JSON).map_err(err_str)?
+    };
+    let _ = ASSET_MANIFEST_CACHE.set(manifest.clone());
+    Ok(manifest)
 }
 
 #[tauri::command(rename_all = "snake_case")]
-fn list_notebooks(state: State<'_, DesktopState>) -> Result<Vec<Notebook>, String> {
-    state.vault.list_notebooks().map_err(err_str)
+async fn get_vault_stats(state: State<'_, DesktopState>) -> Result<VaultStats, String> {
+    spawn_vault(&state.vault, |vault| {
+        vault.get_vault_stats().map_err(err_str)
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-fn create_notebook(
+async fn list_notebooks(state: State<'_, DesktopState>) -> Result<Vec<Notebook>, String> {
+    spawn_vault(&state.vault, |vault| {
+        vault.list_notebooks().map_err(err_str)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn create_notebook(
     state: State<'_, DesktopState>,
     name: String,
     description: Option<String>,
     cover_asset: Option<String>,
     accent_color: Option<String>,
 ) -> Result<Notebook, String> {
-    state
-        .vault
-        .create_notebook(CreateNotebookRequest {
-            name,
-            description,
-            cover_asset,
-            accent_color,
-        })
-        .map_err(err_str)
+    spawn_vault(&state.vault, move |vault| {
+        vault
+            .create_notebook(CreateNotebookRequest {
+                name,
+                description,
+                cover_asset,
+                accent_color,
+            })
+            .map_err(err_str)
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-fn list_entries(
+async fn list_entries(
     state: State<'_, DesktopState>,
     notebook_id: Option<String>,
     tag: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
 ) -> Result<Vec<EntrySummary>, String> {
-    state
-        .vault
-        .list_entries(notebook_id.as_deref(), tag.as_deref(), limit, offset)
-        .map_err(err_str)
+    spawn_vault(&state.vault, move |vault| {
+        vault
+            .list_entries(notebook_id.as_deref(), tag.as_deref(), limit, offset)
+            .map_err(err_str)
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-fn get_entry(state: State<'_, DesktopState>, id: String) -> Result<Entry, String> {
-    state.vault.get_entry(&id).map_err(err_str)
+async fn get_entry(state: State<'_, DesktopState>, id: String) -> Result<Entry, String> {
+    spawn_vault(&state.vault, move |vault| {
+        vault.get_entry(&id).map_err(err_str)
+    })
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
 #[tauri::command(rename_all = "snake_case")]
-fn save_entry(
+async fn save_entry(
     state: State<'_, DesktopState>,
     id: Option<Uuid>,
     title: String,
@@ -437,34 +598,42 @@ fn save_entry(
     audio: Option<Vec<VoiceMemoMeta>>,
     body: String,
 ) -> Result<Entry, String> {
-    state
-        .vault
-        .save_entry(SaveEntryRequest {
-            id,
-            title,
-            date,
-            notebook_id,
-            tags: tags.unwrap_or_default(),
-            mood,
-            starred: starred.unwrap_or(false),
-            weather,
-            location,
-            stamps: stamps.unwrap_or_default(),
-            photos: photos.unwrap_or_default(),
-            audio: audio.unwrap_or_default(),
-            body,
-        })
-        .map_err(err_str)
+    spawn_vault(&state.vault, move |vault| {
+        vault
+            .save_entry(SaveEntryRequest {
+                id,
+                title,
+                date,
+                notebook_id,
+                tags: tags.unwrap_or_default(),
+                mood,
+                starred: starred.unwrap_or(false),
+                weather,
+                location,
+                stamps: stamps.unwrap_or_default(),
+                photos: photos.unwrap_or_default(),
+                audio: audio.unwrap_or_default(),
+                body,
+            })
+            .map_err(err_str)
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-fn delete_entry(state: State<'_, DesktopState>, id: Uuid) -> Result<DeleteEntryResponse, String> {
-    state.vault.delete_entry(id).map_err(err_str)
+async fn delete_entry(
+    state: State<'_, DesktopState>,
+    id: Uuid,
+) -> Result<DeleteEntryResponse, String> {
+    spawn_vault(&state.vault, move |vault| {
+        vault.delete_entry(id).map_err(err_str)
+    })
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
 #[tauri::command(rename_all = "snake_case")]
-fn search_entries(
+async fn search_entries(
     state: State<'_, DesktopState>,
     text: Option<String>,
     notebook_id: Option<String>,
@@ -476,73 +645,80 @@ fn search_entries(
     limit: Option<usize>,
     offset: Option<usize>,
 ) -> Result<Vec<SearchHit>, String> {
-    state
-        .vault
-        .search_entries(&SearchQuery {
-            text,
-            notebook_id,
-            tag,
-            mood,
-            starred_only: starred_only.unwrap_or(false),
-            from_date,
-            to_date,
-            limit,
-            offset,
-        })
-        .map_err(err_str)
+    spawn_vault(&state.vault, move |vault| {
+        vault
+            .search_entries(&SearchQuery {
+                text,
+                notebook_id,
+                tag,
+                mood,
+                starred_only: starred_only.unwrap_or(false),
+                from_date,
+                to_date,
+                limit,
+                offset,
+            })
+            .map_err(err_str)
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-fn list_tags(state: State<'_, DesktopState>) -> Result<Vec<TagCount>, String> {
-    state.vault.list_tags().map_err(err_str)
+async fn list_tags(state: State<'_, DesktopState>) -> Result<Vec<TagCount>, String> {
+    spawn_vault(&state.vault, |vault| vault.list_tags().map_err(err_str)).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-fn get_calendar_month(
+async fn get_calendar_month(
     state: State<'_, DesktopState>,
     year: Option<i32>,
     month: Option<u32>,
     notebook_id: Option<String>,
 ) -> Result<Vec<CalendarDaySummary>, String> {
-    let today = Utc::now().date_naive();
-    state
-        .vault
-        .get_calendar_month(
-            year.unwrap_or_else(|| today.year()),
-            month.unwrap_or_else(|| today.month()),
-            notebook_id.as_deref(),
-        )
-        .map_err(err_str)
+    let today = Local::now().date_naive();
+    let y = year.unwrap_or_else(|| today.year());
+    let m = month.unwrap_or_else(|| today.month());
+    spawn_vault(&state.vault, move |vault| {
+        vault
+            .get_calendar_month(y, m, notebook_id.as_deref())
+            .map_err(err_str)
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-fn get_on_this_day(
+async fn get_on_this_day(
     state: State<'_, DesktopState>,
     month: Option<u32>,
     day: Option<u32>,
 ) -> Result<Vec<OnThisDayGroup>, String> {
-    let today = Utc::now().date_naive();
-    state
-        .vault
-        .get_on_this_day(
-            month.unwrap_or_else(|| today.month()),
-            day.unwrap_or_else(|| today.day()),
-            today.year(),
-        )
-        .map_err(err_str)
+    let today = Local::now().date_naive();
+    let m = month.unwrap_or_else(|| today.month());
+    let d = day.unwrap_or_else(|| today.day());
+    let y = today.year();
+    spawn_vault(&state.vault, move |vault| {
+        vault.get_on_this_day(m, d, y).map_err(err_str)
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-fn get_backlinks(
+async fn get_backlinks(
     state: State<'_, DesktopState>,
     entry_id: Uuid,
 ) -> Result<Vec<BacklinkRef>, String> {
-    state.vault.get_backlinks(entry_id).map_err(err_str)
+    spawn_vault(&state.vault, move |vault| {
+        vault.get_backlinks(entry_id).map_err(err_str)
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-fn list_templates(state: State<'_, DesktopState>) -> Result<Vec<Template>, String> {
-    state.vault.list_templates().map_err(err_str)
+async fn list_templates(state: State<'_, DesktopState>) -> Result<Vec<Template>, String> {
+    spawn_vault(&state.vault, |vault| {
+        vault.list_templates().map_err(err_str)
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -553,60 +729,70 @@ async fn get_daily_context(
     lng: Option<f64>,
 ) -> Result<DailyContext, String> {
     let vault = Arc::clone(&state.vault);
-    let target_date = date.unwrap_or_else(|| Utc::now().date_naive());
+    let target_date = date.unwrap_or_else(|| Local::now().date_naive());
     core_get_daily_context(&vault, target_date, lat, lng)
         .await
         .map_err(err_str)
 }
 
 #[tauri::command(rename_all = "snake_case")]
-fn get_asset_manifest() -> Result<AssetManifest, String> {
-    if let Some(path) = resolve_asset_manifest_path() {
-        let raw = fs::read_to_string(&path).map_err(err_str)?;
-        return serde_json::from_str(&raw).map_err(err_str);
+async fn get_asset_manifest() -> Result<AssetManifest, String> {
+    if let Some(cached) = ASSET_MANIFEST_CACHE.get() {
+        return Ok(cached.clone());
     }
-    serde_json::from_str(EMBEDDED_MANIFEST_JSON).map_err(err_str)
+    tauri::async_runtime::spawn_blocking(load_asset_manifest_from_disk_or_embedded)
+        .await
+        .map_err(|e| format!("background task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "snake_case")]
-fn import_dayone(
+async fn import_dayone(
     state: State<'_, DesktopState>,
     zip_path: String,
     notebook_id: Option<String>,
     dry_run: Option<bool>,
 ) -> Result<MigrationReport, String> {
-    core_import_dayone(
-        &state.vault,
-        &ImportDayOneRequest {
-            zip_path,
-            notebook_id,
-            dry_run: dry_run.unwrap_or(false),
-        },
-    )
-    .map_err(err_str)
+    spawn_vault(&state.vault, move |vault| {
+        core_import_dayone(
+            &vault,
+            &ImportDayOneRequest {
+                zip_path,
+                notebook_id,
+                dry_run: dry_run.unwrap_or(false),
+            },
+        )
+        .map_err(err_str)
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-fn import_notion(
+async fn import_notion(
     state: State<'_, DesktopState>,
     source_path: String,
     notebook_id: Option<String>,
     dry_run: Option<bool>,
 ) -> Result<MigrationReport, String> {
-    core_import_notion(
-        &state.vault,
-        &ImportNotionRequest {
-            source_path,
-            notebook_id,
-            dry_run: dry_run.unwrap_or(false),
-        },
-    )
-    .map_err(err_str)
+    spawn_vault(&state.vault, move |vault| {
+        core_import_notion(
+            &vault,
+            &ImportNotionRequest {
+                source_path,
+                notebook_id,
+                dry_run: dry_run.unwrap_or(false),
+            },
+        )
+        .map_err(err_str)
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-fn list_backups(state: State<'_, DesktopState>) -> Result<Vec<BackupInfo>, String> {
-    core_list_backups(state.vault.root()).map_err(err_str)
+async fn list_backups(state: State<'_, DesktopState>) -> Result<Vec<BackupInfo>, String> {
+    spawn_vault(&state.vault, |vault| {
+        core_list_backups(vault.root()).map_err(err_str)
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -615,44 +801,50 @@ async fn create_backup(
     passphrase: String,
     upload_gdrive: Option<bool>,
 ) -> Result<BackupInfo, String> {
-    let vault = Arc::clone(&state.vault);
     if upload_gdrive.unwrap_or(false) {
+        let vault = Arc::clone(&state.vault);
         let res = core_sync_gdrive(vault.root(), Some(&passphrase), &BackupConfig::default())
             .await
             .map_err(err_str)?;
         res.backup
             .ok_or_else(|| "Backup completed without metadata".to_string())
     } else {
-        core_create_backup(vault.root(), &passphrase, &BackupConfig::default()).map_err(err_str)
+        spawn_vault(&state.vault, move |vault| {
+            core_create_backup(vault.root(), &passphrase, &BackupConfig::default()).map_err(err_str)
+        })
+        .await
     }
 }
 
 #[tauri::command(rename_all = "snake_case")]
-fn restore_backup(
+async fn restore_backup(
     state: State<'_, DesktopState>,
     backup_id_or_path: String,
     passphrase: String,
     target_vault_dir: Option<String>,
     overwrite_existing: Option<bool>,
 ) -> Result<RestoreBackupResponse, String> {
-    let resp = core_restore_backup(
-        state.vault.root(),
-        &RestoreBackupRequest {
-            backup_id_or_path,
-            passphrase,
-            target_vault_dir,
-            overwrite_existing: overwrite_existing.unwrap_or(true),
-        },
-    )
-    .map_err(err_str)?;
-    if resp.restored {
-        if Path::new(&resp.target_vault_dir) == state.vault.root() {
-            let _ = state.vault.rebuild_index();
-        } else if let Ok(restored_vault) = Vault::open(&resp.target_vault_dir) {
-            let _ = restored_vault.rebuild_index();
+    spawn_vault(&state.vault, move |vault| {
+        let resp = core_restore_backup(
+            vault.root(),
+            &RestoreBackupRequest {
+                backup_id_or_path,
+                passphrase,
+                target_vault_dir,
+                overwrite_existing: overwrite_existing.unwrap_or(true),
+            },
+        )
+        .map_err(err_str)?;
+        if resp.restored {
+            if Path::new(&resp.target_vault_dir) == vault.root() {
+                let _ = vault.rebuild_index();
+            } else if let Ok(restored_vault) = Vault::open(&resp.target_vault_dir) {
+                let _ = restored_vault.rebuild_index();
+            }
         }
-    }
-    Ok(resp)
+        Ok(resp)
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -672,32 +864,36 @@ async fn sync_gdrive(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-fn upload_photo(
+async fn upload_photo(
     state: State<'_, DesktopState>,
     filename: String,
     data_base64: String,
     caption: Option<String>,
 ) -> Result<PolaroidMeta, String> {
-    let bytes = decode_base64(&data_base64)?;
-    state
-        .vault
-        .ingest_photo(&filename, &bytes, caption)
-        .map_err(err_str)
+    spawn_vault(&state.vault, move |vault| {
+        let bytes = decode_base64(&data_base64)?;
+        vault
+            .ingest_photo(&filename, &bytes, caption)
+            .map_err(err_str)
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-fn upload_audio(
+async fn upload_audio(
     state: State<'_, DesktopState>,
     filename: String,
     data_base64: String,
     duration_secs: Option<f32>,
     mime_type: Option<String>,
 ) -> Result<VoiceMemoMeta, String> {
-    let bytes = decode_base64(&data_base64)?;
-    state
-        .vault
-        .ingest_audio(&filename, &bytes, duration_secs, mime_type)
-        .map_err(err_str)
+    spawn_vault(&state.vault, move |vault| {
+        let bytes = decode_base64(&data_base64)?;
+        vault
+            .ingest_audio(&filename, &bytes, duration_secs, mime_type)
+            .map_err(err_str)
+    })
+    .await
 }
 
 // ---------------------------------------------------------------------------
@@ -819,15 +1015,22 @@ fn main() {
 
             let vault_dir = resolve_vault_path(cli.vault, None);
             let vault = Vault::open(&vault_dir).expect("failed to initialize local journal vault");
-            let protocol_vault_root = vault.root().to_path_buf();
+            let protocol_vault_root = Arc::new(vault.root().to_path_buf());
             let state = DesktopState {
                 vault: Arc::new(vault),
             };
 
             tauri::Builder::default()
-                .register_uri_scheme_protocol("vault", move |_ctx, request| {
-                    build_vault_protocol_response(&protocol_vault_root, &request)
-                })
+                .register_asynchronous_uri_scheme_protocol(
+                    "vault",
+                    move |_ctx, request, responder| {
+                        let root = Arc::clone(&protocol_vault_root);
+                        tauri::async_runtime::spawn_blocking(move || {
+                            let response = build_vault_protocol_response(&root, &request);
+                            responder.respond(response);
+                        });
+                    },
+                )
                 .setup(|app| {
                     app.manage(state);
                     if app.get_webview_window("main").is_none() {
@@ -881,5 +1084,138 @@ fn main() {
                 std::process::exit(1);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn make_temp_dir(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("log-tauri-{label}-{nanos}"));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    #[test]
+    fn decode_base64_handles_data_uri_whitespace_and_rejects_trailing_padding() {
+        assert_eq!(decode_base64("").unwrap(), b"");
+        assert_eq!(
+            decode_base64("data:image/png;base64, SGVs\n bG8= ").unwrap(),
+            b"Hello"
+        );
+        assert_eq!(decode_base64("YQ==").unwrap(), b"a");
+        assert_eq!(decode_base64("YWI=").unwrap(), b"ab");
+        assert!(decode_base64("YQ==YQ==").is_err());
+        assert!(decode_base64("YQ=").is_err());
+        assert!(decode_base64("Y=Q=").is_err());
+    }
+
+    #[test]
+    fn vault_protocol_supports_range_head_416_and_blocks_symlink_escape() {
+        let root = make_temp_dir("vault-proto");
+        let media_dir = root.join("media");
+        let outside = make_temp_dir("vault-outside");
+        fs::create_dir_all(&media_dir).unwrap();
+        let audio_path = media_dir.join("sample chord.wav");
+        fs::write(&audio_path, b"0123456789ABCDEF").unwrap();
+        let secret_path = outside.join("secret.txt");
+        fs::write(&secret_path, b"top-secret").unwrap();
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&secret_path, media_dir.join("escape.txt")).unwrap();
+
+        let range_req = tauri::http::Request::builder()
+            .method("GET")
+            .uri("vault://localhost/vault-media/sample%20chord.wav")
+            .header("Range", "bytes=4-7")
+            .body(Vec::new())
+            .unwrap();
+        let resp = build_vault_protocol_response(&root, &range_req);
+        assert_eq!(resp.status(), 206);
+        assert_eq!(resp.body(), b"4567");
+        assert_eq!(
+            resp.headers()
+                .get("Content-Range")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "bytes 4-7/16"
+        );
+        assert_eq!(
+            resp.headers()
+                .get("Cache-Control")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "private, max-age=31536000, immutable"
+        );
+
+        let head_req = tauri::http::Request::builder()
+            .method("HEAD")
+            .uri("vault://localhost/vault-media/sample%20chord.wav")
+            .body(Vec::new())
+            .unwrap();
+        let head_resp = build_vault_protocol_response(&root, &head_req);
+        assert_eq!(head_resp.status(), 200);
+        assert!(head_resp.body().is_empty());
+        assert_eq!(
+            head_resp
+                .headers()
+                .get("Content-Length")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "16"
+        );
+
+        let bad_range_req = tauri::http::Request::builder()
+            .method("GET")
+            .uri("vault://localhost/vault-media/sample%20chord.wav")
+            .header("Range", "bytes=999-1000")
+            .body(Vec::new())
+            .unwrap();
+        let bad_range_resp = build_vault_protocol_response(&root, &bad_range_req);
+        assert_eq!(bad_range_resp.status(), 416);
+        assert_eq!(
+            bad_range_resp
+                .headers()
+                .get("Content-Range")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "bytes */16"
+        );
+
+        #[cfg(unix)]
+        {
+            let escape_req = tauri::http::Request::builder()
+                .method("GET")
+                .uri("vault://localhost/vault-media/escape.txt")
+                .body(Vec::new())
+                .unwrap();
+            let escape_resp = build_vault_protocol_response(&root, &escape_req);
+            assert_eq!(escape_resp.status(), 403);
+        }
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn desktop_exec_escapes_percent_and_quotes_spaces() {
+        assert_eq!(
+            desktop::format_desktop_exec(Path::new("/usr/bin/log-journal")),
+            "/usr/bin/log-journal"
+        );
+        assert_eq!(
+            desktop::format_desktop_exec(Path::new("/tmp/my app/100%/log-journal")),
+            "\"/tmp/my app/100%%/log-journal\""
+        );
     }
 }

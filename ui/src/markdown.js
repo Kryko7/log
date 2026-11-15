@@ -18,6 +18,30 @@ function isSafeHref(href) {
   }
 }
 
+function isSafeImageSrc(rawSrc) {
+  if (!rawSrc) return false;
+  const s = String(rawSrc).trim();
+  if (!s) return false;
+  if (s.startsWith("/vault-media/") || s.startsWith("/vault-thumbs/") || s.startsWith("/assets/")) {
+    return true;
+  }
+  if (/^data:image\/(png|jpeg|jpg|webp|gif);base64,/i.test(s)) {
+    return true;
+  }
+  if (s.startsWith("/")) return true;
+  try {
+    const u = new URL(s, "https://example.invalid");
+    return (
+      u.protocol === "http:" ||
+      u.protocol === "https:" ||
+      u.protocol === "vault:" ||
+      u.protocol === "asset:"
+    );
+  } catch {
+    return false;
+  }
+}
+
 function makeIconSpan(name, cls = "tiny-icon") {
   const wrap = document.createElement("span");
   wrap.className = "md-icon-wrap";
@@ -25,20 +49,35 @@ function makeIconSpan(name, cls = "tiny-icon") {
   return wrap.firstElementChild || wrap;
 }
 
-function resolveWikilinkTarget(target, allEntries) {
+function buildEntryIndex(allEntries) {
+  const byId = new Map();
+  const byTitle = new Map();
+  const list = [];
+  if (!Array.isArray(allEntries)) {
+    return { byId, byTitle, list };
+  }
+  for (const e of allEntries) {
+    if (!e) continue;
+    const idKey = String(e.id || "").toLowerCase();
+    const titleKey = String(e.title || "").trim().toLowerCase();
+    if (idKey && !byId.has(idKey)) byId.set(idKey, e);
+    if (titleKey && !byTitle.has(titleKey)) byTitle.set(titleKey, e);
+    list.push({ entry: e, titleKey });
+  }
+  return { byId, byTitle, list };
+}
+
+function resolveWikilinkTarget(target, entryIndex) {
   const needle = String(target || "").trim().toLowerCase();
-  if (!needle || !Array.isArray(allEntries)) return null;
-  return (
-    allEntries.find(
-      (e) =>
-        String(e.id || "").toLowerCase() === needle ||
-        String(e.title || "").trim().toLowerCase() === needle
-    ) ||
-    allEntries.find((e) =>
-      String(e.title || "").trim().toLowerCase().includes(needle)
-    ) ||
-    null
-  );
+  if (!needle || !entryIndex) return null;
+  const exact = entryIndex.byId.get(needle) || entryIndex.byTitle.get(needle);
+  if (exact) return exact;
+  for (const item of entryIndex.list) {
+    if (item.titleKey && item.titleKey.includes(needle)) {
+      return item.entry;
+    }
+  }
+  return null;
 }
 
 export function extractWikilinks(bodyText) {
@@ -86,6 +125,37 @@ function appendInline(parent, text, ctx) {
       }
     }
 
+    // Inline image: ![alt](url)
+    if (src[i] === "!" && src[i + 1] === "[") {
+      const closeBracket = src.indexOf("]", i + 2);
+      if (closeBracket >= i + 2 && src[closeBracket + 1] === "(") {
+        const closeParen = src.indexOf(")", closeBracket + 2);
+        if (closeParen > closeBracket + 2) {
+          const alt = src.slice(i + 2, closeBracket);
+          const rawSrc = src.slice(closeBracket + 2, closeParen).trim();
+          flushPlain();
+          if (isSafeImageSrc(rawSrc)) {
+            const img = document.createElement("img");
+            img.src = resolveVaultUrl(rawSrc);
+            img.alt = alt || "Journal figure";
+            img.loading = "lazy";
+            img.decoding = "async";
+            img.style.maxWidth = "100%";
+            img.style.maxHeight = "480px";
+            img.style.borderRadius = "4px";
+            img.style.border = "1px solid var(--border-subtle)";
+            img.style.display = "block";
+            img.style.margin = "0.75rem 0";
+            parent.appendChild(img);
+          } else {
+            parent.appendChild(document.createTextNode(alt || "[blocked image]"));
+          }
+          i = closeParen + 1;
+          continue;
+        }
+      }
+    }
+
     // Wikilink: [[Target]] or [[Target|Label]]
     if (src[i] === "[" && src[i + 1] === "[") {
       const end = src.indexOf("]]", i + 2);
@@ -96,7 +166,7 @@ function appendInline(parent, text, ctx) {
           const pipe = inner.indexOf("|");
           const target = (pipe >= 0 ? inner.slice(0, pipe) : inner).trim();
           const label = (pipe >= 0 ? inner.slice(pipe + 1) : inner).trim();
-          const match = resolveWikilinkTarget(target, ctx.allEntries);
+          const match = resolveWikilinkTarget(target, ctx.entryIndex);
 
           const btn = document.createElement("button");
           btn.type = "button";
@@ -119,13 +189,10 @@ function appendInline(parent, text, ctx) {
       }
     }
 
-    // Markdown link: [label](url) (but not image ![alt](url))
+    // Markdown link: [label](url)
     if (src[i] === "[" && (i === 0 || src[i - 1] !== "!")) {
       const closeBracket = src.indexOf("]", i + 1);
-      if (
-        closeBracket > i + 1 &&
-        src[closeBracket + 1] === "("
-      ) {
+      if (closeBracket > i + 1 && src[closeBracket + 1] === "(") {
         const closeParen = src.indexOf(")", closeBracket + 2);
         if (closeParen > closeBracket + 2) {
           const label = src.slice(i + 1, closeBracket);
@@ -182,6 +249,13 @@ function appendInline(parent, text, ctx) {
 }
 
 function makeFigure(alt, rawSrc) {
+  if (!isSafeImageSrc(rawSrc)) {
+    const p = document.createElement("p");
+    p.className = "entry-paragraph muted-empty-note";
+    p.textContent = alt ? `[Blocked image: ${alt}]` : "[Blocked unsafe image source]";
+    return p;
+  }
+
   const fig = document.createElement("figure");
   fig.className = "entry-inline-figure";
 
@@ -189,6 +263,7 @@ function makeFigure(alt, rawSrc) {
   img.src = resolveVaultUrl(rawSrc);
   img.alt = alt || "Journal figure";
   img.loading = "lazy";
+  img.decoding = "async";
   fig.appendChild(img);
 
   if (alt && alt.trim()) {
@@ -207,7 +282,11 @@ export function renderMarkdownReadView(
   onToggleTodo = null
 ) {
   container.innerHTML = "";
-  const ctx = { allEntries, onOpenEntry, onToggleTodo };
+  const ctx = {
+    entryIndex: buildEntryIndex(allEntries),
+    onOpenEntry,
+    onToggleTodo,
+  };
   const text = String(bodyText || "").replace(/\r\n/g, "\n");
   const lines = text.split("\n");
 

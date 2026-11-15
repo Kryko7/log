@@ -100,21 +100,36 @@ pub async fn get_daily_context(
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false);
 
-    let weather_hint = if offline {
-        None
+    let cached_events = load_cached_calendar_events(date);
+    let gcal_token = if cached_events.is_empty() && !offline {
+        std::env::var("LOG_GCAL_TOKEN")
+            .ok()
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
     } else {
-        fetch_open_meteo_weather(lat, lng).await
+        None
     };
 
-    let mut events = load_cached_calendar_events(date);
-    if events.is_empty() && !offline {
-        if let Ok(token) = std::env::var("LOG_GCAL_TOKEN") {
-            let token = token.trim();
-            if !token.is_empty() {
-                events = fetch_gcal_events(token, date).await;
+    let (weather_hint, fetched_events) = tokio::join!(
+        async {
+            if offline {
+                None
+            } else {
+                fetch_open_meteo_weather(lat, lng).await
+            }
+        },
+        async {
+            match gcal_token.as_deref() {
+                Some(token) => fetch_gcal_events(token, date).await,
+                None => Vec::new(),
             }
         }
-    }
+    );
+    let events = if cached_events.is_empty() {
+        fetched_events
+    } else {
+        cached_events
+    };
 
     let mut suggested_prompts: Vec<String> = events
         .iter()
@@ -151,12 +166,21 @@ pub async fn get_daily_context(
     })
 }
 
+fn shared_http_client() -> Option<&'static reqwest::Client> {
+    static CLIENT: std::sync::OnceLock<Option<reqwest::Client>> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .connect_timeout(Duration::from_millis(1500))
+                .timeout(Duration::from_millis(2500))
+                .build()
+                .ok()
+        })
+        .as_ref()
+}
+
 async fn fetch_open_meteo_weather(lat: f64, lng: f64) -> Option<WeatherInfo> {
-    let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_millis(1500))
-        .timeout(Duration::from_millis(2500))
-        .build()
-        .ok()?;
+    let client = shared_http_client()?;
 
     let url = format!(
         "{OPEN_METEO_URL}?latitude={lat:.4}&longitude={lng:.4}&current=temperature_2m,relative_humidity_2m,weather_code"
@@ -223,11 +247,7 @@ fn load_cached_calendar_events(date: NaiveDate) -> Vec<CalendarEventPrompt> {
 }
 
 async fn fetch_gcal_events(bearer_token: &str, date: NaiveDate) -> Vec<CalendarEventPrompt> {
-    let Ok(client) = reqwest::Client::builder()
-        .connect_timeout(Duration::from_millis(1500))
-        .timeout(Duration::from_millis(2500))
-        .build()
-    else {
+    let Some(client) = shared_http_client() else {
         return Vec::new();
     };
 

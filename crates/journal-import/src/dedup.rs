@@ -1,13 +1,26 @@
 //! Normalization and idempotent deduplication helpers for Day One and Notion imports.
 
 use std::collections::HashSet;
+use std::fs;
+use std::path::{Component, Path};
+use std::sync::OnceLock;
 
 use chrono::NaiveDate;
-use journal_core::Vault;
+use journal_core::{markdown::split_frontmatter, Vault};
 use regex::Regex;
 use sha2::{Digest, Sha256};
 
 use crate::error::Result;
+
+fn img_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"!\[[^\]]*\]\([^)]*\)").expect("valid image regex"))
+}
+
+fn link_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\[([^\]]+)\]\([^)]*\)").expect("valid link regex"))
+}
 
 /// In-memory index of entries already present in a [`Vault`] used for fast,
 /// idempotent deduplication across Day One and Notion delta imports.
@@ -21,24 +34,39 @@ pub struct DeduplicationIndex {
 
 impl DeduplicationIndex {
     /// Populate the deduplication index from all entries currently stored in `vault`.
+    ///
+    /// Reads raw vault `.md` files directly instead of calling `Vault::get_entry`
+    /// to avoid redundant SQLite locks, HTML rendering, and backlink queries.
     pub fn from_vault(vault: &Vault) -> Result<Self> {
         let mut idx = Self::default();
         let summaries = vault.list_entries(None, None, None, None)?;
+        let root = vault.root();
+
         for summary in summaries {
-            if let Ok(entry) = vault.get_entry(&summary.id.to_string()) {
-                idx.insert(
-                    entry.frontmatter.source_id.as_deref(),
-                    entry.frontmatter.date.date_naive(),
-                    &entry.frontmatter.title,
-                    &entry.body,
-                );
-            } else {
-                idx.dates_in_vault.insert(summary.date.date_naive());
-                let norm_title = normalize_text(&summary.title);
-                if !norm_title.is_empty() {
-                    idx.date_titles_and_leads
-                        .insert((summary.date.date_naive(), norm_title));
+            let entry_date = summary.date.date_naive();
+            let rel_path = Path::new(&summary.path);
+            let is_safe = !summary.path.is_empty()
+                && !rel_path.components().any(|c| {
+                    matches!(
+                        c,
+                        Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                    )
+                });
+
+            if is_safe {
+                if let Ok(raw) = fs::read_to_string(root.join(rel_path)) {
+                    if let Ok((yaml, body)) = split_frontmatter(&raw) {
+                        let source_id = extract_yaml_source_id(yaml);
+                        idx.insert(source_id.as_deref(), entry_date, &summary.title, body);
+                        continue;
+                    }
                 }
+            }
+
+            idx.dates_in_vault.insert(entry_date);
+            let norm_title = normalize_text(&summary.title);
+            if !norm_title.is_empty() {
+                idx.date_titles_and_leads.insert((entry_date, norm_title));
             }
         }
         Ok(idx)
@@ -51,9 +79,9 @@ impl DeduplicationIndex {
         }
         self.dates_in_vault.insert(date);
 
-        let body_hash = normalized_body_hash(body);
-        if !body.trim().is_empty() {
-            self.date_body_hashes.insert((date, body_hash));
+        let norm_body = normalize_text(body);
+        if !norm_body.is_empty() {
+            self.date_body_hashes.insert((date, sha256_hex(&norm_body)));
         }
 
         let norm_title = normalize_text(title);
@@ -77,11 +105,12 @@ impl DeduplicationIndex {
     }
 
     pub fn has_date_body_hash(&self, date: NaiveDate, body: &str) -> bool {
-        if body.trim().is_empty() {
+        let norm_body = normalize_text(body);
+        if norm_body.is_empty() {
             return false;
         }
         self.date_body_hashes
-            .contains(&(date, normalized_body_hash(body)))
+            .contains(&(date, sha256_hex(&norm_body)))
     }
 
     pub fn has_date_title_or_lead(&self, date: NaiveDate, title: &str, body: &str) -> bool {
@@ -94,14 +123,43 @@ impl DeduplicationIndex {
     }
 }
 
+fn extract_yaml_source_id(yaml: &str) -> Option<String> {
+    for line in yaml.lines() {
+        // Only match top-level `source_id:` (ignore nested keys under photos/weather/etc.).
+        if line.starts_with(' ') || line.starts_with('\t') {
+            continue;
+        }
+        let trimmed = line.trim_end_matches('\r');
+        if let Some(rest) = trimmed.strip_prefix("source_id:") {
+            let val = rest.trim();
+            if val.is_empty() || val == "null" || val == "~" {
+                return None;
+            }
+            let unquoted = val
+                .strip_prefix('"')
+                .and_then(|s| s.strip_suffix('"'))
+                .or_else(|| val.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+                .unwrap_or(val)
+                .trim();
+            if !unquoted.is_empty() {
+                return Some(unquoted.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn sha256_hex(norm: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(norm.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
 /// Normalize prose for comparison by stripping Markdown image/link URLs, formatting tokens,
 /// and collapsing whitespace into single lowercase spaces.
 pub fn normalize_text(input: &str) -> String {
-    let img_re = Regex::new(r"!\[[^\]]*\]\([^)]*\)").expect("valid image regex");
-    let link_re = Regex::new(r"\[([^\]]+)\]\([^)]*\)").expect("valid link regex");
-
-    let without_imgs = img_re.replace_all(input, " ");
-    let without_links = link_re.replace_all(&without_imgs, "$1");
+    let without_imgs = img_regex().replace_all(input, " ");
+    let without_links = link_regex().replace_all(&without_imgs, "$1");
 
     let mut cleaned = String::with_capacity(without_links.len());
     for ch in without_links.chars() {
@@ -121,10 +179,7 @@ pub fn normalize_text(input: &str) -> String {
 
 /// Compute a deterministic SHA-256 hex digest of normalized Markdown body text.
 pub fn normalized_body_hash(body: &str) -> String {
-    let norm = normalize_text(body);
-    let mut hasher = Sha256::new();
-    hasher.update(norm.as_bytes());
-    hex::encode(hasher.finalize())
+    sha256_hex(&normalize_text(body))
 }
 
 /// Extract and normalize the first non-empty prose paragraph (skipping pure image lines

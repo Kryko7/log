@@ -13,6 +13,56 @@ function escapeHtml(str) {
     .replace(/'/g, "&#39;");
 }
 
+const modalAbortMap = new WeakMap();
+
+function bindModalEscape(container, backdrop, onClose) {
+  const prev = modalAbortMap.get(container);
+  if (prev) prev.abort();
+
+  const ac = new AbortController();
+  modalAbortMap.set(container, ac);
+
+  const close = () => {
+    ac.abort();
+    if (modalAbortMap.get(container) === ac) {
+      modalAbortMap.delete(container);
+    }
+    onClose?.();
+  };
+
+  window.addEventListener(
+    "keydown",
+    (ev) => {
+      if (!container.isConnected || !backdrop.isConnected) {
+        ac.abort();
+        return;
+      }
+      if (ev.key === "Escape") {
+        close();
+      }
+    },
+    { signal: ac.signal }
+  );
+
+  return close;
+}
+
+function safeAssetUrl(rawUrl) {
+  const s = String(rawUrl || "").trim();
+  if (!s) return "";
+  if (
+    s.startsWith("/assets/") ||
+    s.startsWith("assets/") ||
+    s.startsWith("/vault-media/") ||
+    s.startsWith("/vault-thumbs/") ||
+    s.startsWith("vault://") ||
+    s.startsWith("http://vault.localhost/")
+  ) {
+    return resolveVaultUrl(s);
+  }
+  return "";
+}
+
 function el(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -88,11 +138,10 @@ export function isAutoDerivedTitle(title, bodyOrSnippet) {
 }
 
 function formatMonthYear(year, month) {
-  const dt = new Date(Date.UTC(year, month - 1, 1));
+  const dt = new Date(year, month - 1, 1);
   return new Intl.DateTimeFormat("en-US", {
     month: "long",
     year: "numeric",
-    timeZone: "UTC",
   }).format(dt);
 }
 
@@ -109,20 +158,19 @@ function formatDateParts(isoString) {
   if (Number.isNaN(dt.getTime())) {
     return { day: "--", sub: "---", time: "--:--", full: String(isoString || "") };
   }
-  const day = String(dt.getUTCDate()).padStart(2, "0");
-  const mon = new Intl.DateTimeFormat("en-US", { month: "short", timeZone: "UTC" })
+  const day = String(dt.getDate()).padStart(2, "0");
+  const mon = new Intl.DateTimeFormat("en-US", { month: "short" })
     .format(dt)
     .toUpperCase();
-  const wk = new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: "UTC" })
+  const wk = new Intl.DateTimeFormat("en-US", { weekday: "short" })
     .format(dt)
     .toUpperCase();
-  const hh = String(dt.getUTCHours()).padStart(2, "0");
-  const mm = String(dt.getUTCMinutes()).padStart(2, "0");
+  const hh = String(dt.getHours()).padStart(2, "0");
+  const mm = String(dt.getMinutes()).padStart(2, "0");
   const full = new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "2-digit",
     year: "numeric",
-    timeZone: "UTC",
   }).format(dt);
   return { day, sub: `${mon} · ${wk}`, time: `${hh}:${mm}`, full };
 }
@@ -136,7 +184,7 @@ function buildTimelineRow(entry, notebookName, callbacks, subMode = "weekday") {
   dateCol.appendChild(el("span", "timeline-day-num", parts.day));
   const subText =
     subMode === "year"
-      ? `${parts.sub.split(" · ")[0]} · ${new Date(entry.date).getUTCFullYear()}`
+      ? `${parts.sub.split(" · ")[0]} · ${new Date(entry.date).getFullYear()}`
       : parts.sub;
   dateCol.appendChild(el("span", "timeline-day-sub small-caps-meta", subText));
   dateCol.appendChild(el("span", "timeline-day-time", parts.time));
@@ -215,6 +263,7 @@ function buildTimelineRow(entry, notebookName, callbacks, subMode = "weekday") {
     img.src = resolveVaultUrl(entry.cover_photo);
     img.alt = "Entry photograph";
     img.loading = "lazy";
+    img.decoding = "async";
     thumbWrap.appendChild(img);
     article.appendChild(thumbWrap);
   }
@@ -280,42 +329,73 @@ export function renderTimelineView(container, state, callbacks = {}) {
     return;
   }
 
-  const groups = new Map();
-  for (const entry of entries) {
-    const dt = new Date(entry.date);
-    const y = dt.getUTCFullYear();
-    const m = dt.getUTCMonth() + 1;
-    const key = `${y}-${String(m).padStart(2, "0")}`;
-    if (!groups.has(key)) {
-      groups.set(key, { label: formatMonthYear(y, m), items: [] });
-    }
-    groups.get(key).items.push(entry);
-  }
+  const TIMELINE_BATCH_SIZE = 80;
+  let renderedCount = 0;
+  let currentMonthKey = null;
+  let currentRowsEl = null;
+  let currentCountEl = null;
+  let currentMonthCount = 0;
 
   const monthsList = el("div", "timeline-months-list");
-  for (const { label, items } of groups.values()) {
-    const groupEl = el("section", "timeline-month-group");
-    const divider = el("div", "timeline-month-divider");
-    divider.appendChild(el("span", "timeline-month-heading", label));
-    divider.appendChild(
-      el(
-        "span",
-        "timeline-month-count small-caps-meta",
-        `${items.length} ${items.length === 1 ? "entry" : "entries"}`
-      )
-    );
-    groupEl.appendChild(divider);
+  const loadMoreRow = el("div", "timeline-load-more-row");
 
-    const rowsEl = el("div", "timeline-rows");
-    for (const entry of items) {
+  function appendNextBatch() {
+    const slice = entries.slice(renderedCount, renderedCount + TIMELINE_BATCH_SIZE);
+    if (slice.length === 0) return;
+
+    const frag = document.createDocumentFragment();
+    for (const entry of slice) {
+      const dt = new Date(entry.date);
+      const y = dt.getFullYear();
+      const m = dt.getMonth() + 1;
+      const key = `${y}-${String(m).padStart(2, "0")}`;
+
+      if (key !== currentMonthKey || !currentRowsEl) {
+        currentMonthKey = key;
+        currentMonthCount = 0;
+
+        const groupEl = el("section", "timeline-month-group");
+        const divider = el("div", "timeline-month-divider");
+        divider.appendChild(el("span", "timeline-month-heading", formatMonthYear(y, m)));
+        currentCountEl = el("span", "timeline-month-count small-caps-meta", "");
+        divider.appendChild(currentCountEl);
+        groupEl.appendChild(divider);
+
+        currentRowsEl = el("div", "timeline-rows");
+        groupEl.appendChild(currentRowsEl);
+        frag.appendChild(groupEl);
+      }
+
       const nbName = entry.notebook_id ? nbMap.get(entry.notebook_id) : null;
-      rowsEl.appendChild(buildTimelineRow(entry, nbName, callbacks, "weekday"));
+      currentRowsEl.appendChild(buildTimelineRow(entry, nbName, callbacks, "weekday"));
+      currentMonthCount += 1;
+      if (currentCountEl) {
+        currentCountEl.textContent = `${currentMonthCount} ${
+          currentMonthCount === 1 ? "entry" : "entries"
+        }`;
+      }
     }
-    groupEl.appendChild(rowsEl);
-    monthsList.appendChild(groupEl);
+
+    monthsList.appendChild(frag);
+    renderedCount += slice.length;
+
+    const remaining = entries.length - renderedCount;
+    loadMoreRow.innerHTML = "";
+    if (remaining > 0) {
+      const moreBtn = el(
+        "button",
+        "btn-editorial btn-ghost",
+        `Show more (${remaining} older ${remaining === 1 ? "entry" : "entries"})`
+      );
+      moreBtn.type = "button";
+      moreBtn.addEventListener("click", appendNextBatch);
+      loadMoreRow.appendChild(moreBtn);
+    }
   }
 
+  appendNextBatch();
   section.appendChild(monthsList);
+  section.appendChild(loadMoreRow);
   container.appendChild(section);
 }
 
@@ -328,8 +408,8 @@ export function renderTimelineView(container, state, callbacks = {}) {
 export function renderCalendarView(container, state, callbacks = {}) {
   container.innerHTML = "";
   const now = new Date();
-  const year = state.calendarYear || now.getUTCFullYear();
-  const month = state.calendarMonth || now.getUTCMonth() + 1;
+  const year = state.calendarYear || now.getFullYear();
+  const month = state.calendarMonth || now.getMonth() + 1;
   const days = state.calendarDays || [];
   const entries = state.entries || [];
 
@@ -356,7 +436,7 @@ export function renderCalendarView(container, state, callbacks = {}) {
   const todayBtn = el("button", "btn-editorial small", "Today");
   todayBtn.type = "button";
   todayBtn.addEventListener("click", () =>
-    callbacks.onSelectMonth?.(now.getUTCFullYear(), now.getUTCMonth() + 1)
+    callbacks.onSelectMonth?.(now.getFullYear(), now.getMonth() + 1)
   );
 
   const nextBtn = el("button", "icon-btn");
@@ -380,11 +460,11 @@ export function renderCalendarView(container, state, callbacks = {}) {
   sheet.appendChild(wkRow);
 
   const grid = el("div", "calendar-grid");
-  const firstDay = new Date(Date.UTC(year, month - 1, 1));
-  const leadingEmpty = (firstDay.getUTCDay() + 6) % 7;
-  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  const todayStr = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-${String(
-    now.getUTCDate()
+  const firstDay = new Date(year, month - 1, 1);
+  const leadingEmpty = (firstDay.getDay() + 6) % 7;
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(
+    now.getDate()
   ).padStart(2, "0")}`;
 
   for (let i = 0; i < leadingEmpty; i++) {
@@ -412,6 +492,7 @@ export function renderCalendarView(container, state, callbacks = {}) {
       img.src = resolveVaultUrl(primaryEntry.cover_photo);
       img.alt = "";
       img.loading = "lazy";
+      img.decoding = "async";
       bg.appendChild(img);
       bg.appendChild(el("div", "calendar-day-thumb-scrim"));
       cell.appendChild(bg);
@@ -553,6 +634,7 @@ function openPolaroidLightbox(photo) {
   img.className = "polaroid-lightbox-img";
   img.src = resolveVaultUrl(photo.url);
   img.alt = photo.caption || "Journal photograph";
+  img.decoding = "async";
 
   sheet.appendChild(closeBtn);
   sheet.appendChild(img);
@@ -560,18 +642,30 @@ function openPolaroidLightbox(photo) {
     sheet.appendChild(el("p", "polaroid-lightbox-caption", photo.caption));
   }
 
+  const ac = new AbortController();
   function close() {
-    window.removeEventListener("keydown", onKey);
+    ac.abort();
     backdrop.remove();
   }
-  function onKey(ev) {
-    if (ev.key === "Escape") close();
-  }
-  closeBtn.addEventListener("click", close);
-  backdrop.addEventListener("click", (ev) => {
-    if (ev.target === backdrop) close();
-  });
-  window.addEventListener("keydown", onKey);
+  closeBtn.addEventListener("click", close, { signal: ac.signal });
+  backdrop.addEventListener(
+    "click",
+    (ev) => {
+      if (ev.target === backdrop) close();
+    },
+    { signal: ac.signal }
+  );
+  window.addEventListener(
+    "keydown",
+    (ev) => {
+      if (!backdrop.isConnected) {
+        ac.abort();
+        return;
+      }
+      if (ev.key === "Escape") close();
+    },
+    { signal: ac.signal }
+  );
 
   backdrop.appendChild(sheet);
   document.body.appendChild(backdrop);
@@ -589,10 +683,12 @@ export function createPolaroidElement(photo, figureNumber, callbacks = {}) {
   const baseRot = Number(photo.rotation_deg || 0);
   card.style.transform = `perspective(760px) rotateX(0deg) rotateY(0deg) rotateZ(${baseRot}deg)`;
 
-  if (photo.washi_asset) {
+  const safeWashi = safeAssetUrl(photo.washi_asset);
+  if (safeWashi) {
     const washi = document.createElement("img");
     washi.className = "polaroid-washi-strip";
-    washi.src = photo.washi_asset;
+    washi.src = safeWashi;
+    washi.decoding = "async";
     washi.alt = "";
     washi.setAttribute("aria-hidden", "true");
     card.appendChild(washi);
@@ -617,6 +713,7 @@ export function createPolaroidElement(photo, figureNumber, callbacks = {}) {
   img.src = resolveVaultUrl(photo.thumbnail_url || photo.url);
   img.alt = photo.caption || "Journal photograph";
   img.loading = "lazy";
+  img.decoding = "async";
   frame.appendChild(img);
 
   const sheen = el("div", "polaroid-specular-sheen");
@@ -630,22 +727,37 @@ export function createPolaroidElement(photo, figureNumber, callbacks = {}) {
   });
   card.appendChild(frame);
 
+  let tiltRaf = 0;
+  let lastClientX = 0;
+  let lastClientY = 0;
+
   card.addEventListener("mousemove", (ev) => {
-    const rect = card.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return;
-    const nx = Math.min(Math.max((ev.clientX - rect.left) / rect.width, 0), 1);
-    const ny = Math.min(Math.max((ev.clientY - rect.top) / rect.height, 0), 1);
-    const tiltX = (0.5 - ny) * 10;
-    const tiltY = (nx - 0.5) * 12;
-    card.classList.add("is-hovered");
-    card.style.setProperty("--sheen-x", `${Math.round(nx * 100)}%`);
-    card.style.setProperty("--sheen-y", `${Math.round(ny * 100)}%`);
-    card.style.transform = `perspective(760px) rotateX(${tiltX.toFixed(2)}deg) rotateY(${tiltY.toFixed(
-      2
-    )}deg) rotateZ(${baseRot}deg) translateY(-2px)`;
+    lastClientX = ev.clientX;
+    lastClientY = ev.clientY;
+    if (tiltRaf) return;
+    tiltRaf = requestAnimationFrame(() => {
+      tiltRaf = 0;
+      if (!card.isConnected) return;
+      const rect = card.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      const nx = Math.min(Math.max((lastClientX - rect.left) / rect.width, 0), 1);
+      const ny = Math.min(Math.max((lastClientY - rect.top) / rect.height, 0), 1);
+      const tiltX = (0.5 - ny) * 10;
+      const tiltY = (nx - 0.5) * 12;
+      card.classList.add("is-hovered");
+      card.style.setProperty("--sheen-x", `${Math.round(nx * 100)}%`);
+      card.style.setProperty("--sheen-y", `${Math.round(ny * 100)}%`);
+      card.style.transform = `perspective(760px) rotateX(${tiltX.toFixed(2)}deg) rotateY(${tiltY.toFixed(
+        2
+      )}deg) rotateZ(${baseRot}deg) translateY(-2px)`;
+    });
   });
 
   card.addEventListener("mouseleave", () => {
+    if (tiltRaf) {
+      cancelAnimationFrame(tiltRaf);
+      tiltRaf = 0;
+    }
     card.classList.remove("is-hovered");
     card.style.transform = `perspective(760px) rotateX(0deg) rotateY(0deg) rotateZ(${baseRot}deg)`;
   });
@@ -717,12 +829,16 @@ export function renderStampOverlay(container, stamps = [], editable = false, onC
         st.scale || 1
       })`;
 
-      const img = document.createElement("img");
-      img.className = "placed-stamp-img";
-      img.src = st.asset_path;
-      img.alt = st.label || st.asset_id || "Journal stamp";
-      img.draggable = false;
-      node.appendChild(img);
+      const stampUrl = safeAssetUrl(st.asset_path);
+      if (stampUrl) {
+        const img = document.createElement("img");
+        img.className = "placed-stamp-img";
+        img.src = stampUrl;
+        img.decoding = "async";
+        img.alt = st.label || st.asset_id || "Journal stamp";
+        img.draggable = false;
+        node.appendChild(img);
+      }
 
       if (st.label) {
         node.appendChild(el("span", "placed-stamp-label", st.label));
@@ -738,7 +854,12 @@ export function renderStampOverlay(container, stamps = [], editable = false, onC
           redraw();
 
           const rect = layer.getBoundingClientRect();
+          const dragAc = new AbortController();
           function onMove(mv) {
+            if (!layer.isConnected) {
+              dragAc.abort();
+              return;
+            }
             if (rect.width <= 0 || rect.height <= 0) return;
             st.x_pct = Math.min(Math.max(((mv.clientX - rect.left) / rect.width) * 100, 3), 97);
             st.y_pct = Math.min(Math.max(((mv.clientY - rect.top) / rect.height) * 100, 3), 97);
@@ -749,13 +870,12 @@ export function renderStampOverlay(container, stamps = [], editable = false, onC
             }
           }
           function onUp() {
-            window.removeEventListener("mousemove", onMove);
-            window.removeEventListener("mouseup", onUp);
+            dragAc.abort();
             layer.classList.remove("is-dragging");
             commit(list);
           }
-          window.addEventListener("mousemove", onMove);
-          window.addEventListener("mouseup", onUp);
+          window.addEventListener("mousemove", onMove, { signal: dragAc.signal });
+          window.addEventListener("mouseup", onUp, { signal: dragAc.signal });
         });
 
         node.dataset.stampId = st.id;
@@ -876,7 +996,9 @@ export function renderStampPickerPopover(container, manifest, onPick, onClose) {
       const btn = el("button", "stamp-choice-card");
       btn.type = "button";
       const img = document.createElement("img");
-      img.src = item.path;
+      img.src = safeAssetUrl(item.path);
+      img.loading = "lazy";
+      img.decoding = "async";
       img.alt = item.label;
       img.className = activeTab === "stickers" ? "stamp-preview-diecut" : "stamp-preview-ink";
       btn.appendChild(img);
@@ -1007,164 +1129,24 @@ export function renderSearchModal(container, state, callbacks = {}) {
   fillResults(resultsList);
   sheet.appendChild(resultsList);
 
-  function close() {
-    window.removeEventListener("keydown", onKey);
-    callbacks.onClose?.();
-  }
-  function onKey(ev) {
-    if (ev.key === "Escape") close();
-  }
+  const close = bindModalEscape(container, backdrop, callbacks.onClose);
   closeBtn.addEventListener("click", close);
   backdrop.addEventListener("click", (ev) => {
     if (ev.target === backdrop) close();
   });
-  window.addEventListener("keydown", onKey);
 
   backdrop.appendChild(sheet);
   container.appendChild(backdrop);
   requestAnimationFrame(() => input.focus());
 }
 
-/**
- * Render the Day One & Notion Migration modal.
- * @param {HTMLElement} container
- * @param {object} state
- * @param {object} callbacks
- */
-export function renderMigrationModal(container, state, callbacks = {}) {
-  container.innerHTML = "";
-  let dayonePath = "";
-  let notionPath = "";
-  let dryRun = false;
-
-  const backdrop = el("div", "editorial-modal-backdrop");
-  const sheet = el("div", "editorial-modal-sheet wide");
-  sheet.setAttribute("role", "dialog");
-  sheet.setAttribute("aria-modal", "true");
-  sheet.setAttribute("aria-label", "Import");
-
-  const header = el("header", "modal-header");
-  const titleGroup = el("div", "modal-title-group");
-  const titleIcon = el("span", "modal-title-icon");
-  titleIcon.innerHTML = icon("archive");
-  titleGroup.appendChild(titleIcon);
-
-  const titleText = el("div");
-  titleText.appendChild(el("span", "small-caps-meta", "Import"));
-  titleText.appendChild(el("h2", "modal-serif-heading", "Day One & Notion Import"));
-  titleGroup.appendChild(titleText);
-  header.appendChild(titleGroup);
-
-  const closeBtn = el("button", "icon-btn");
-  closeBtn.type = "button";
-  closeBtn.setAttribute("aria-label", "Close import modal");
-  closeBtn.innerHTML = icon("close");
-  header.appendChild(closeBtn);
-  sheet.appendChild(header);
-
-  const body = el("div", "modal-body");
-  const cols = el("div", "migration-columns");
-
-  // Day One Panel
-  const dPanel = el("section", "migration-panel");
-  dPanel.appendChild(el("h3", "panel-serif-title", "Day One Export (.zip or folder)"));
-  dPanel.appendChild(
-    el(
-      "p",
-      "panel-note",
-      "Primary journal source: imports entries, photos, audio, weather, and coordinates."
-    )
-  );
-
-  const dFileLabel = el("label", "btn-editorial btn-sage upload-btn-label");
-  dFileLabel.innerHTML = `${icon("upload")}<span>Upload Day One .zip</span>`;
-  const dFileInput = document.createElement("input");
-  dFileInput.type = "file";
-  dFileInput.accept = ".zip";
-  dFileInput.className = "sr-only";
-  dFileInput.addEventListener("change", () => {
-    const file = dFileInput.files?.[0];
-    if (file) callbacks.onImportDayOneFile?.(file);
-  });
-  dFileLabel.appendChild(dFileInput);
-  dPanel.appendChild(dFileLabel);
-
-  const dPathRow = el("div", "path-import-row");
-  const dInput = document.createElement("input");
-  dInput.type = "text";
-  dInput.className = "editorial-input";
-  dInput.placeholder = "/path/to/dayone-export.zip";
-  dInput.addEventListener("input", () => {
-    dayonePath = dInput.value;
-  });
-  const dRunBtn = el("button", "btn-editorial small", "Import Path");
-  dRunBtn.type = "button";
-  dRunBtn.disabled = Boolean(state.migrationLoading);
-  dRunBtn.addEventListener("click", () => {
-    if (dayonePath.trim()) callbacks.onImportDayOnePath?.(dayonePath.trim(), dryRun);
-  });
-  dPathRow.append(dInput, dRunBtn);
-  dPanel.appendChild(dPathRow);
-  cols.appendChild(dPanel);
-
-  // Notion Panel
-  const nPanel = el("section", "migration-panel");
-  nPanel.appendChild(el("h3", "panel-serif-title", "Notion Export (.zip or folder)"));
-  nPanel.appendChild(
-    el(
-      "p",
-      "panel-note",
-      "Day One Primary — Notion duplicates automatically skipped by source ID, timestamp, and content similarity."
-    )
-  );
-
-  const nFileLabel = el("label", "btn-editorial btn-ghost upload-btn-label");
-  nFileLabel.innerHTML = `${icon("upload")}<span>Upload Notion .zip</span>`;
-  const nFileInput = document.createElement("input");
-  nFileInput.type = "file";
-  nFileInput.accept = ".zip";
-  nFileInput.className = "sr-only";
-  nFileInput.addEventListener("change", () => {
-    const file = nFileInput.files?.[0];
-    if (file) callbacks.onImportNotionFile?.(file);
-  });
-  nFileLabel.appendChild(nFileInput);
-  nPanel.appendChild(nFileLabel);
-
-  const nPathRow = el("div", "path-import-row");
-  const nInput = document.createElement("input");
-  nInput.type = "text";
-  nInput.className = "editorial-input";
-  nInput.placeholder = "/path/to/notion-export";
-  nInput.addEventListener("input", () => {
-    notionPath = nInput.value;
-  });
-  const nRunBtn = el("button", "btn-editorial small", "Import Path");
-  nRunBtn.type = "button";
-  nRunBtn.disabled = Boolean(state.migrationLoading);
-  nRunBtn.addEventListener("click", () => {
-    if (notionPath.trim()) callbacks.onImportNotionPath?.(notionPath.trim(), dryRun);
-  });
-  nPathRow.append(nInput, nRunBtn);
-  nPanel.appendChild(nPathRow);
-  cols.appendChild(nPanel);
-
-  body.appendChild(cols);
-
-  const dryLabel = el("label", "dry-run-toggle");
-  const dryCheck = document.createElement("input");
-  dryCheck.type = "checkbox";
-  dryCheck.addEventListener("change", () => {
-    dryRun = dryCheck.checked;
-  });
-  dryLabel.append(dryCheck, el("span", "", "Dry run (audit without writing files)"));
-  body.appendChild(dryLabel);
-
+function renderMigrationDynamicRegion(region, state) {
+  region.innerHTML = "";
   if (state.migrationLoading) {
-    body.appendChild(el("p", "modal-status-banner", "Processing archive…"));
+    region.appendChild(el("p", "modal-status-banner", "Processing archive…"));
   }
   if (state.migrationError) {
-    body.appendChild(el("p", "form-error", state.migrationError));
+    region.appendChild(el("p", "form-error", state.migrationError));
   }
 
   if (state.migrationReport) {
@@ -1228,26 +1210,236 @@ export function renderMigrationModal(container, state, callbacks = {}) {
     table.appendChild(tbody);
     wrap.appendChild(table);
     box.appendChild(wrap);
-    body.appendChild(box);
+    region.appendChild(box);
   }
+}
+
+/**
+ * Render the Day One & Notion Migration modal.
+ * @param {HTMLElement} container
+ * @param {object} state
+ * @param {object} callbacks
+ */
+export function renderMigrationModal(container, state, callbacks = {}) {
+  container.__migrationCallbacks = callbacks;
+  const existing = container.querySelector('[data-log-modal="migration"]');
+  if (existing) {
+    const dBtn = existing.querySelector('[data-role="migration-dayone-run"]');
+    const nBtn = existing.querySelector('[data-role="migration-notion-run"]');
+    if (dBtn) dBtn.disabled = Boolean(state.migrationLoading);
+    if (nBtn) nBtn.disabled = Boolean(state.migrationLoading);
+    const region = existing.querySelector('[data-region="migration-dynamic"]');
+    if (region) renderMigrationDynamicRegion(region, state);
+    container.__migrationClose = bindModalEscape(container, existing, () =>
+      container.__migrationCallbacks?.onClose?.()
+    );
+    return;
+  }
+
+  container.innerHTML = "";
+
+  const backdrop = el("div", "editorial-modal-backdrop");
+  backdrop.dataset.logModal = "migration";
+  const sheet = el("div", "editorial-modal-sheet wide");
+  sheet.setAttribute("role", "dialog");
+  sheet.setAttribute("aria-modal", "true");
+  sheet.setAttribute("aria-label", "Import");
+
+  const header = el("header", "modal-header");
+  const titleGroup = el("div", "modal-title-group");
+  const titleIcon = el("span", "modal-title-icon");
+  titleIcon.innerHTML = icon("archive");
+  titleGroup.appendChild(titleIcon);
+
+  const titleText = el("div");
+  titleText.appendChild(el("span", "small-caps-meta", "Import"));
+  titleText.appendChild(el("h2", "modal-serif-heading", "Day One & Notion Import"));
+  titleGroup.appendChild(titleText);
+  header.appendChild(titleGroup);
+
+  const closeBtn = el("button", "icon-btn");
+  closeBtn.type = "button";
+  closeBtn.setAttribute("aria-label", "Close import modal");
+  closeBtn.innerHTML = icon("close");
+  header.appendChild(closeBtn);
+  sheet.appendChild(header);
+
+  const body = el("div", "modal-body");
+  const cols = el("div", "migration-columns");
+
+  const dryLabel = el("label", "dry-run-toggle");
+  const dryCheck = document.createElement("input");
+  dryCheck.type = "checkbox";
+  dryLabel.append(dryCheck, el("span", "", "Dry run (audit without writing files)"));
+
+  // Day One Panel
+  const dPanel = el("section", "migration-panel");
+  dPanel.appendChild(el("h3", "panel-serif-title", "Day One Export (.zip or folder)"));
+  dPanel.appendChild(
+    el(
+      "p",
+      "panel-note",
+      "Primary journal source: imports entries, photos, audio, weather, and coordinates."
+    )
+  );
+
+  const dFileLabel = el("label", "btn-editorial btn-sage upload-btn-label");
+  dFileLabel.innerHTML = `${icon("upload")}<span>Upload Day One .zip</span>`;
+  const dFileInput = document.createElement("input");
+  dFileInput.type = "file";
+  dFileInput.accept = ".zip";
+  dFileInput.className = "sr-only";
+  dFileInput.addEventListener("change", () => {
+    const file = dFileInput.files?.[0];
+    if (file) container.__migrationCallbacks?.onImportDayOneFile?.(file);
+  });
+  dFileLabel.appendChild(dFileInput);
+  dPanel.appendChild(dFileLabel);
+
+  const dPathRow = el("div", "path-import-row");
+  const dInput = document.createElement("input");
+  dInput.type = "text";
+  dInput.className = "editorial-input";
+  dInput.placeholder = "/path/to/dayone-export.zip";
+  const dRunBtn = el("button", "btn-editorial small", "Import Path");
+  dRunBtn.type = "button";
+  dRunBtn.dataset.role = "migration-dayone-run";
+  dRunBtn.disabled = Boolean(state.migrationLoading);
+  dRunBtn.addEventListener("click", () => {
+    const p = dInput.value.trim();
+    if (p) container.__migrationCallbacks?.onImportDayOnePath?.(p, dryCheck.checked);
+  });
+  dPathRow.append(dInput, dRunBtn);
+  dPanel.appendChild(dPathRow);
+  cols.appendChild(dPanel);
+
+  // Notion Panel
+  const nPanel = el("section", "migration-panel");
+  nPanel.appendChild(el("h3", "panel-serif-title", "Notion Export (.zip or folder)"));
+  nPanel.appendChild(
+    el(
+      "p",
+      "panel-note",
+      "Day One Primary — Notion duplicates automatically skipped by source ID, timestamp, and content similarity."
+    )
+  );
+
+  const nFileLabel = el("label", "btn-editorial btn-ghost upload-btn-label");
+  nFileLabel.innerHTML = `${icon("upload")}<span>Upload Notion .zip</span>`;
+  const nFileInput = document.createElement("input");
+  nFileInput.type = "file";
+  nFileInput.accept = ".zip";
+  nFileInput.className = "sr-only";
+  nFileInput.addEventListener("change", () => {
+    const file = nFileInput.files?.[0];
+    if (file) container.__migrationCallbacks?.onImportNotionFile?.(file);
+  });
+  nFileLabel.appendChild(nFileInput);
+  nPanel.appendChild(nFileLabel);
+
+  const nPathRow = el("div", "path-import-row");
+  const nInput = document.createElement("input");
+  nInput.type = "text";
+  nInput.className = "editorial-input";
+  nInput.placeholder = "/path/to/notion-export";
+  const nRunBtn = el("button", "btn-editorial small", "Import Path");
+  nRunBtn.type = "button";
+  nRunBtn.dataset.role = "migration-notion-run";
+  nRunBtn.disabled = Boolean(state.migrationLoading);
+  nRunBtn.addEventListener("click", () => {
+    const p = nInput.value.trim();
+    if (p) container.__migrationCallbacks?.onImportNotionPath?.(p, dryCheck.checked);
+  });
+  nPathRow.append(nInput, nRunBtn);
+  nPanel.appendChild(nPathRow);
+  cols.appendChild(nPanel);
+
+  body.appendChild(cols);
+  body.appendChild(dryLabel);
+
+  const dynRegion = document.createElement("div");
+  dynRegion.dataset.region = "migration-dynamic";
+  dynRegion.style.display = "contents";
+  renderMigrationDynamicRegion(dynRegion, state);
+  body.appendChild(dynRegion);
 
   sheet.appendChild(body);
   backdrop.appendChild(sheet);
 
-  function close() {
-    window.removeEventListener("keydown", onKey);
-    callbacks.onClose?.();
-  }
-  function onKey(ev) {
-    if (ev.key === "Escape") close();
-  }
-  closeBtn.addEventListener("click", close);
+  container.__migrationClose = bindModalEscape(container, backdrop, () =>
+    container.__migrationCallbacks?.onClose?.()
+  );
+  closeBtn.addEventListener("click", () => container.__migrationClose?.());
   backdrop.addEventListener("click", (ev) => {
-    if (ev.target === backdrop) close();
+    if (ev.target === backdrop) container.__migrationClose?.();
   });
-  window.addEventListener("keydown", onKey);
 
   container.appendChild(backdrop);
+}
+
+function renderBackupDynamicRegion(region, state, getPassphrase, getCallbacks) {
+  region.innerHTML = "";
+  if (state.backupError) {
+    region.appendChild(el("p", "form-error", state.backupError));
+  }
+  if (state.syncResult?.message) {
+    const banner = el(
+      "p",
+      `modal-status-banner ${state.syncResult.success ? "is-success" : ""}`.trim()
+    );
+    banner.innerHTML = `${icon("check")}<span>${escapeHtml(state.syncResult.message)}</span>`;
+    region.appendChild(banner);
+  }
+
+  const listSection = el("section", "backup-list-section");
+  const listHead = el("div", "backup-list-header");
+  listHead.appendChild(el("span", "small-caps-meta", "Available Backups"));
+  const refreshBtn = el("button", "btn-editorial small");
+  refreshBtn.type = "button";
+  refreshBtn.innerHTML = `${icon("refresh")}<span>Refresh</span>`;
+  refreshBtn.addEventListener("click", () => getCallbacks()?.onRefresh?.());
+  listHead.appendChild(refreshBtn);
+  listSection.appendChild(listHead);
+
+  const backups = state.backups || [];
+  if (backups.length === 0) {
+    listSection.appendChild(
+      el("p", "empty-prose-note", "No encrypted snapshots recorded yet.")
+    );
+  } else {
+    const listWrap = el("div", "backup-items-list");
+    for (const b of backups) {
+      const row = el("div", "backup-item-row");
+      const main = el("div", "backup-item-main");
+      const titleLine = el("div", "backup-item-title-line");
+      titleLine.appendChild(el("span", "backup-filename", b.filename));
+      titleLine.appendChild(
+        el("span", "small-caps-meta", b.encrypted ? "age-encrypted" : "plain")
+      );
+      main.appendChild(titleLine);
+
+      const subText = `${formatDateParts(b.created_at).full} · ${formatBytes(b.size_bytes)} · ${
+        b.entry_count
+      } entries · sha256:${String(b.sha256 || "").slice(0, 10)}`;
+      main.appendChild(el("span", "mono-cell muted-cell", subText));
+      row.appendChild(main);
+
+      const acts = el("div", "backup-item-actions");
+      acts.appendChild(el("span", "small-caps-meta", b.location || "local"));
+      const restoreBtn = el("button", "btn-editorial small", "Restore");
+      restoreBtn.type = "button";
+      restoreBtn.disabled = Boolean(state.backupLoading);
+      restoreBtn.addEventListener("click", () => {
+        getCallbacks()?.onRestoreBackup?.(b.id, getPassphrase());
+      });
+      acts.appendChild(restoreBtn);
+      row.appendChild(acts);
+      listWrap.appendChild(row);
+    }
+    listSection.appendChild(listWrap);
+  }
+
+  region.appendChild(listSection);
 }
 
 /**
@@ -1257,11 +1449,37 @@ export function renderMigrationModal(container, state, callbacks = {}) {
  * @param {object} callbacks
  */
 export function renderBackupModal(container, state, callbacks = {}) {
+  container.__backupCallbacks = callbacks;
+  const gdriveFolder = state.backupConfig?.gdrive_folder || "LogJournal";
+  const existing = container.querySelector('[data-log-modal="backup"]');
+  if (existing) {
+    const passInput = existing.querySelector('[data-role="backup-passphrase"]');
+    const snapBtn = existing.querySelector('[data-role="backup-snap"]');
+    const syncBtn = existing.querySelector('[data-role="backup-sync"]');
+    const syncLabel = existing.querySelector('[data-role="backup-sync-label"]');
+    if (snapBtn) snapBtn.disabled = Boolean(state.backupLoading);
+    if (syncBtn) syncBtn.disabled = Boolean(state.backupLoading);
+    if (syncLabel) syncLabel.textContent = `Sync to Google Drive (${gdriveFolder})`;
+    const region = existing.querySelector('[data-region="backup-dynamic"]');
+    if (region) {
+      renderBackupDynamicRegion(
+        region,
+        state,
+        () => passInput?.value || "",
+        () => container.__backupCallbacks
+      );
+    }
+    container.__backupClose = bindModalEscape(container, existing, () =>
+      container.__backupCallbacks?.onClose?.()
+    );
+    return;
+  }
+
   container.innerHTML = "";
-  let passphrase = "";
   let showPassphrase = false;
 
   const backdrop = el("div", "editorial-modal-backdrop");
+  backdrop.dataset.logModal = "backup";
   const sheet = el("div", "editorial-modal-sheet wide");
   sheet.setAttribute("role", "dialog");
   sheet.setAttribute("aria-modal", "true");
@@ -1296,10 +1514,8 @@ export function renderBackupModal(container, state, callbacks = {}) {
   const passInput = document.createElement("input");
   passInput.type = "password";
   passInput.className = "editorial-input";
+  passInput.dataset.role = "backup-passphrase";
   passInput.placeholder = "Enter passphrase to encrypt or restore…";
-  passInput.addEventListener("input", () => {
-    passphrase = passInput.value;
-  });
 
   const revealBtn = el("button", "btn-editorial small", "Show");
   revealBtn.type = "button";
@@ -1314,23 +1530,26 @@ export function renderBackupModal(container, state, callbacks = {}) {
   const actionRow = el("div", "backup-action-row");
   const snapBtn = el("button", "btn-editorial btn-sage");
   snapBtn.type = "button";
+  snapBtn.dataset.role = "backup-snap";
   snapBtn.disabled = Boolean(state.backupLoading);
   snapBtn.innerHTML = `${icon("shield")}<span>Create .age Encrypted Snapshot</span>`;
   snapBtn.addEventListener("click", () => {
-    callbacks.onCreateBackup?.(passphrase, false);
+    container.__backupCallbacks?.onCreateBackup?.(passInput.value, false);
   });
 
   const syncBtn = el("button", "btn-editorial");
   syncBtn.type = "button";
+  syncBtn.dataset.role = "backup-sync";
   syncBtn.disabled = Boolean(state.backupLoading);
-  syncBtn.innerHTML = `${icon("upload")}<span>Sync to Google Drive (${escapeHtml(
-    state.backupConfig?.gdrive_folder || "LogJournal"
+  syncBtn.innerHTML = `${icon("upload")}<span data-role="backup-sync-label">Sync to Google Drive (${escapeHtml(
+    gdriveFolder
   )})</span>`;
   syncBtn.addEventListener("click", () => {
-    if (callbacks.onSyncGdrive) {
-      callbacks.onSyncGdrive(passphrase);
+    const cbs = container.__backupCallbacks;
+    if (cbs?.onSyncGdrive) {
+      cbs.onSyncGdrive(passInput.value);
     } else {
-      callbacks.onCreateBackup?.(passphrase, true);
+      cbs?.onCreateBackup?.(passInput.value, true);
     }
   });
 
@@ -1338,82 +1557,27 @@ export function renderBackupModal(container, state, callbacks = {}) {
   passBox.appendChild(actionRow);
   body.appendChild(passBox);
 
-  if (state.backupError) {
-    body.appendChild(el("p", "form-error", state.backupError));
-  }
-  if (state.syncResult?.message) {
-    const banner = el(
-      "p",
-      `modal-status-banner ${state.syncResult.success ? "is-success" : ""}`.trim()
-    );
-    banner.innerHTML = `${icon("check")}<span>${escapeHtml(state.syncResult.message)}</span>`;
-    body.appendChild(banner);
-  }
+  const dynRegion = document.createElement("div");
+  dynRegion.dataset.region = "backup-dynamic";
+  dynRegion.style.display = "contents";
+  renderBackupDynamicRegion(
+    dynRegion,
+    state,
+    () => passInput.value,
+    () => container.__backupCallbacks
+  );
+  body.appendChild(dynRegion);
 
-  const listSection = el("section", "backup-list-section");
-  const listHead = el("div", "backup-list-header");
-  listHead.appendChild(el("span", "small-caps-meta", "Available Backups"));
-  const refreshBtn = el("button", "btn-editorial small");
-  refreshBtn.type = "button";
-  refreshBtn.innerHTML = `${icon("refresh")}<span>Refresh</span>`;
-  refreshBtn.addEventListener("click", () => callbacks.onRefresh?.());
-  listHead.appendChild(refreshBtn);
-  listSection.appendChild(listHead);
-
-  const backups = state.backups || [];
-  if (backups.length === 0) {
-    listSection.appendChild(
-      el("p", "empty-prose-note", "No encrypted snapshots recorded yet.")
-    );
-  } else {
-    const listWrap = el("div", "backup-items-list");
-    for (const b of backups) {
-      const row = el("div", "backup-item-row");
-      const main = el("div", "backup-item-main");
-      const titleLine = el("div", "backup-item-title-line");
-      titleLine.appendChild(el("span", "backup-filename", b.filename));
-      titleLine.appendChild(
-        el("span", "small-caps-meta", b.encrypted ? "age-encrypted" : "plain")
-      );
-      main.appendChild(titleLine);
-
-      const subText = `${formatDateParts(b.created_at).full} · ${formatBytes(b.size_bytes)} · ${
-        b.entry_count
-      } entries · sha256:${String(b.sha256 || "").slice(0, 10)}`;
-      main.appendChild(el("span", "mono-cell muted-cell", subText));
-      row.appendChild(main);
-
-      const acts = el("div", "backup-item-actions");
-      acts.appendChild(el("span", "small-caps-meta", b.location || "local"));
-      const restoreBtn = el("button", "btn-editorial small", "Restore");
-      restoreBtn.type = "button";
-      restoreBtn.disabled = Boolean(state.backupLoading);
-      restoreBtn.addEventListener("click", () => {
-        callbacks.onRestoreBackup?.(b.id, passphrase);
-      });
-      acts.appendChild(restoreBtn);
-      row.appendChild(acts);
-      listWrap.appendChild(row);
-    }
-    listSection.appendChild(listWrap);
-  }
-
-  body.appendChild(listSection);
   sheet.appendChild(body);
   backdrop.appendChild(sheet);
 
-  function close() {
-    window.removeEventListener("keydown", onKey);
-    callbacks.onClose?.();
-  }
-  function onKey(ev) {
-    if (ev.key === "Escape") close();
-  }
-  closeBtn.addEventListener("click", close);
+  container.__backupClose = bindModalEscape(container, backdrop, () =>
+    container.__backupCallbacks?.onClose?.()
+  );
+  closeBtn.addEventListener("click", () => container.__backupClose?.());
   backdrop.addEventListener("click", (ev) => {
-    if (ev.target === backdrop) close();
+    if (ev.target === backdrop) container.__backupClose?.();
   });
-  window.addEventListener("keydown", onKey);
 
   container.appendChild(backdrop);
 }
