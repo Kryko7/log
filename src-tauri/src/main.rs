@@ -54,6 +54,10 @@ struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     vault: Option<PathBuf>,
 
+    /// Disable WebKitGTK GPU DMA-BUF rendering (fallback for older Wayland drivers).
+    #[arg(long, global = true)]
+    software_rendering: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -1010,13 +1014,20 @@ fn main() {
 
     match cli.command {
         None | Some(Commands::Launch) => {
-            // Guard against WebKitGTK Wayland DMABUF blank-canvas rendering bugs on Arch/Linux.
-            if std::env::var_os("WAYLAND_DISPLAY").is_some()
+            // Hardware DMA-BUF rendering is enabled by default for native Wayland (>60Hz)
+            // frame pacing; `--software-rendering` opts into software compositing if needed.
+            if cli.software_rendering
                 && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none()
             {
                 unsafe {
                     std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
                 }
+            }
+
+            #[cfg(target_os = "linux")]
+            {
+                glib::set_prgname(Some("dev.logjournal.app"));
+                glib::set_application_name("Log");
             }
 
             let vault_dir = resolve_vault_path(cli.vault, None);
@@ -1038,6 +1049,9 @@ fn main() {
                     },
                 )
                 .setup(|app| {
+                    #[cfg(target_os = "linux")]
+                    gdk::set_program_class("dev.logjournal.app");
+
                     app.manage(state);
                     if app.get_webview_window("main").is_none() {
                         if let Some(window_cfg) = app.config().app.windows.first() {
@@ -1251,5 +1265,15 @@ mod tests {
         assert!(!parse_overwrite(&["--overwrite", "false"]));
         assert!(!parse_overwrite(&["--overwrite=false"]));
         assert!(parse_overwrite(&["--overwrite", "true"]));
+    }
+
+    #[test]
+    fn software_rendering_flag_is_opt_in() {
+        let default_cli = Cli::try_parse_from(["log-journal"]).expect("default cli parse");
+        assert!(!default_cli.software_rendering);
+
+        let flag_cli =
+            Cli::try_parse_from(["log-journal", "--software-rendering"]).expect("flag cli parse");
+        assert!(flag_cli.software_rendering);
     }
 }

@@ -2577,6 +2577,8 @@ dependencies = [
  "chrono",
  "clap",
  "dirs 6.0.0",
+ "gdk",
+ "glib",
  "hound",
  "image",
  "journal-core",

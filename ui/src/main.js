@@ -62,6 +62,8 @@ const state = {
 
 let shellEl = null;
 let sidebarRoot = null;
+let mainScrollEl = null;
+let reopenBtnEl = null;
 let viewRoot = null;
 let modalRoot = null;
 let paperShader = null;
@@ -91,6 +93,17 @@ function applySidebarCollapsed(collapsed) {
     state.sidebarCollapsed ? "true" : "false"
   );
   shellEl?.classList.toggle("is-sidebar-collapsed", state.sidebarCollapsed);
+  if (reopenBtnEl) {
+    reopenBtnEl.hidden = !state.sidebarCollapsed;
+  }
+}
+
+function resetMainScroll() {
+  if (mainScrollEl) mainScrollEl.scrollTop = 0;
+  if (viewRoot) viewRoot.scrollTop = 0;
+  document.documentElement.scrollTop = 0;
+  document.body.scrollTop = 0;
+  window.scrollTo(0, 0);
 }
 
 function recomputeFilteredEntries() {
@@ -298,6 +311,11 @@ async function navigateToView(viewKey) {
     await activeEditorHandle?.flushSave();
   }
   state.activeView = viewKey;
+  if (viewKey === "timeline") {
+    state.selectedNotebookId = null;
+    state.selectedTag = null;
+    recomputeFilteredEntries();
+  }
   if (viewKey === "calendar") {
     await loadCalendarMonth(state.calendarYear, state.calendarMonth);
   } else if (viewKey === "on_this_day") {
@@ -325,30 +343,32 @@ function getSidebarCallbacks() {
       const nb = await api.createNotebook(req);
       await refreshVaultIndex();
       state.selectedNotebookId = nb.id;
+      state.selectedTag = null;
+      state.activeView = "timeline";
       recomputeFilteredEntries();
       renderSidebarOnly();
-      if (state.activeView !== "editor") {
-        renderMainView();
-      }
+      renderMainView();
     },
     onSelectNotebook: async (nbId) => {
+      if (state.activeView === "editor") {
+        await activeEditorHandle?.flushSave();
+      }
       state.selectedNotebookId = nbId;
+      state.selectedTag = null;
+      state.activeView = "timeline";
       recomputeFilteredEntries();
       renderSidebarOnly();
-      if (state.activeView === "calendar") {
-        await loadCalendarMonth(state.calendarYear, state.calendarMonth);
-        renderMainView();
-      } else if (state.activeView === "timeline") {
-        renderMainView();
-      }
+      renderMainView();
     },
-    onSelectTag: (tag) => {
+    onSelectTag: async (tag) => {
+      if (state.activeView === "editor") {
+        await activeEditorHandle?.flushSave();
+      }
       state.selectedTag = tag;
+      state.activeView = "timeline";
       recomputeFilteredEntries();
       renderSidebarOnly();
-      if (state.activeView === "timeline") {
-        renderMainView();
-      }
+      renderMainView();
     },
     onOpenMigration: () => openModal("migration"),
     onOpenBackup: () => openModal("backup"),
@@ -370,6 +390,7 @@ function renderMainView() {
     activeEditorHandle.destroy?.();
     activeEditorHandle = null;
   }
+  resetMainScroll();
 
   if (state.activeView === "editor") {
     if (!state.currentEntry) {
@@ -427,6 +448,7 @@ function renderMainView() {
         renderSidebarOnly();
         renderMainView();
       },
+      onClearFilters: () => navigateToView("timeline"),
       onNewEntry: () => startNewEntry(),
     });
     return;
@@ -774,25 +796,26 @@ function mountShell() {
   sidebarRoot = document.createElement("aside");
   sidebarRoot.id = "sidebar-root";
 
-  const mainEl = document.createElement("main");
-  mainEl.className = "sanctuary-main";
+  mainScrollEl = document.createElement("main");
+  mainScrollEl.className = "sanctuary-main";
 
-  const reopenBtn = document.createElement("button");
-  reopenBtn.type = "button";
-  reopenBtn.className = "sidebar-reopen-btn";
-  reopenBtn.title = "Open sidebar (Ctrl+\\)";
+  reopenBtnEl = document.createElement("button");
+  reopenBtnEl.type = "button";
+  reopenBtnEl.className = "sidebar-reopen-btn";
+  reopenBtnEl.title = "Open sidebar (Ctrl+\\)";
+  reopenBtnEl.hidden = !state.sidebarCollapsed;
   const iconWrap = document.createElement("span");
   iconWrap.style.display = "inline-flex";
   iconWrap.innerHTML = icon("sidebar", "tiny-icon");
-  reopenBtn.appendChild(iconWrap.firstElementChild || iconWrap);
-  reopenBtn.appendChild(document.createTextNode("Sidebar"));
-  reopenBtn.addEventListener("click", () => applySidebarCollapsed(false));
+  reopenBtnEl.appendChild(iconWrap.firstElementChild || iconWrap);
+  reopenBtnEl.appendChild(document.createTextNode("Sidebar"));
+  reopenBtnEl.addEventListener("click", () => applySidebarCollapsed(false));
 
   viewRoot = document.createElement("div");
   viewRoot.id = "view-root";
 
-  mainEl.append(reopenBtn, viewRoot);
-  shellEl.append(sidebarRoot, mainEl);
+  mainScrollEl.append(reopenBtnEl, viewRoot);
+  shellEl.append(sidebarRoot, mainScrollEl);
 
   modalRoot = document.createElement("div");
   modalRoot.id = "modal-root";

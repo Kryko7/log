@@ -28,3 +28,7 @@ journal-types = { path = "../crates/journal-types" }
 journal-core = { path = "../crates/journal-core" }
 journal-import = { path = "../crates/journal-import" }
 journal-sync = { path = "../crates/journal-sync" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+glib = "0.18"
+gdk = "0.18"

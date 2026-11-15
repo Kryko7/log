@@ -23,8 +23,9 @@ if [[ -z "$BIN" ]]; then
     fi
 fi
 
-# WebKitGTK DMABUF renderer guard on Wayland compositors
-if [[ -n "${WAYLAND_DISPLAY:-}" && -z "${WEBKIT_DISABLE_DMABUF_RENDERER:-}" ]]; then
+# Native GPU DMA-BUF is enabled by default for >60Hz Wayland compositors.
+# Set LOG_SOFTWARE_RENDERING=1 (or pass --software-rendering) only if a GPU driver has blank-canvas issues.
+if [[ "${LOG_SOFTWARE_RENDERING:-0}" == "1" && -z "${WEBKIT_DISABLE_DMABUF_RENDERER:-}" ]]; then
     export WEBKIT_DISABLE_DMABUF_RENDERER=1
 fi
 

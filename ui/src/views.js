@@ -284,17 +284,49 @@ export function renderTimelineView(container, state, callbacks = {}) {
   const notebooks = state.notebooks ?? [];
   const nbMap = new Map(notebooks.map((nb) => [nb.id, nb.name]));
 
+  const selectedNb = state.selectedNotebookId
+    ? notebooks.find((nb) => nb.id === state.selectedNotebookId) || null
+    : null;
+  const selectedTag = state.selectedTag || null;
+  const hasFilter = Boolean(state.selectedNotebookId || selectedTag);
+
+  let headingTitle = "All Entries";
+  let subtitlePrefix = "";
+  let clearLabel = "Show all entries";
+  if (selectedNb || state.selectedNotebookId) {
+    headingTitle = selectedNb?.name || "Notebook";
+    subtitlePrefix = selectedTag ? `Notebook · #${selectedTag}` : "Notebook";
+    clearLabel = "Show all entries";
+  } else if (selectedTag) {
+    headingTitle = `#${selectedTag}`;
+    subtitlePrefix = "Tag";
+    clearLabel = "Clear filter";
+  }
+
   const section = el("section", "timeline-river");
-  section.setAttribute("aria-label", "All entries");
+  section.setAttribute("aria-label", headingTitle);
 
   const header = el("header", "stage-header");
   const titleWrap = el("div");
-  titleWrap.appendChild(el("h1", "stage-serif-title", "All Entries"));
+  titleWrap.appendChild(el("h1", "stage-serif-title", headingTitle));
   const n = entries.length;
+  const countLabel = `${n} ${n === 1 ? "entry" : "entries"}`;
   titleWrap.appendChild(
-    el("p", "stage-subtitle", `${n} ${n === 1 ? "entry" : "entries"}`)
+    el(
+      "p",
+      "stage-subtitle",
+      subtitlePrefix ? `${subtitlePrefix} · ${countLabel}` : countLabel
+    )
   );
   header.appendChild(titleWrap);
+
+  const headerActions = el("div", "stage-header-actions");
+  if (hasFilter && callbacks.onClearFilters) {
+    const clearBtn = el("button", "btn-editorial btn-ghost", clearLabel);
+    clearBtn.type = "button";
+    clearBtn.addEventListener("click", () => callbacks.onClearFilters?.());
+    headerActions.appendChild(clearBtn);
+  }
 
   const onNew = callbacks.onNewEntry || callbacks.onNewFolio;
   if (onNew) {
@@ -302,7 +334,10 @@ export function renderTimelineView(container, state, callbacks = {}) {
     newBtn.type = "button";
     newBtn.innerHTML = `${icon("feather")}<span>New Entry</span>`;
     newBtn.addEventListener("click", () => onNew());
-    header.appendChild(newBtn);
+    headerActions.appendChild(newBtn);
+  }
+  if (headerActions.childNodes.length > 0) {
+    header.appendChild(headerActions);
   }
   section.appendChild(header);
 
@@ -314,15 +349,27 @@ export function renderTimelineView(container, state, callbacks = {}) {
       el(
         "p",
         "empty-prose-note",
-        "Start writing a new entry or clear the active filter."
+        hasFilter
+          ? "No entries match this filter yet."
+          : "Start writing a new entry to begin this journal."
       )
     );
+    const emptyActions = el("div", "stage-header-actions");
+    if (hasFilter && callbacks.onClearFilters) {
+      const clearEmptyBtn = el("button", "btn-editorial btn-ghost", clearLabel);
+      clearEmptyBtn.type = "button";
+      clearEmptyBtn.addEventListener("click", () => callbacks.onClearFilters?.());
+      emptyActions.appendChild(clearEmptyBtn);
+    }
     if (onNew) {
       const btn = el("button", "btn-editorial btn-sage");
       btn.type = "button";
       btn.innerHTML = `${icon("feather")}<span>New Entry</span>`;
       btn.addEventListener("click", () => onNew());
-      empty.appendChild(btn);
+      emptyActions.appendChild(btn);
+    }
+    if (emptyActions.childNodes.length > 0) {
+      empty.appendChild(emptyActions);
     }
     section.appendChild(empty);
     container.appendChild(section);

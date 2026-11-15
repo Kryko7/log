@@ -98,7 +98,7 @@ Global flag: `--vault <PATH>` (overrides `LOG_VAULT_DIR`; defaults to `~/Persona
 
 - `scripts/install-arch-deps.sh` — Install `webkit2gtk-4.1` and GTK build dependencies on Arch Linux.
 - `scripts/install.sh` / `scripts/uninstall.sh` — Build and install/remove the XDG launcher (`dev.logjournal.app.desktop`), icons, and `~/.local/bin/log-journal`.
-- `scripts/launch-wayland.sh` — Launch `log-journal` with Wayland WebKitGTK DMABUF safety guard (`WEBKIT_DISABLE_DMABUF_RENDERER=1`).
+- `scripts/launch-wayland.sh` — Launch `log-journal` on Wayland with native GPU DMA-BUF (or `LOG_SOFTWARE_RENDERING=1` / `--software-rendering` fallback).
 - `packaging/arch/PKGBUILD` — Arch Linux `makepkg` recipe for system-wide installation.
 - `scripts/import-all.sh` — Batch Day One + Notion migration helper.
 - `scripts/sync-cron.sh` / `scripts/nightly-backup.sh` — Automated `age`-encrypted vault backups and Google Drive sync.

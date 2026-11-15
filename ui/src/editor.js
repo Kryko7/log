@@ -153,7 +153,16 @@ function formatEntryDateLine(isoDate, body) {
     : `${datePart} · ${timePart}`;
 }
 
-function autoSizeTextarea(el) {
+function countNewlines(str) {
+  let count = 0;
+  let pos = -1;
+  while ((pos = str.indexOf("\n", pos + 1)) !== -1) {
+    count += 1;
+  }
+  return count;
+}
+
+function measureTextareaHeight(el) {
   if (!el) return;
   const scroller = el.closest(".sanctuary-main") || document.scrollingElement;
   const prevScroll = scroller ? scroller.scrollTop : 0;
@@ -267,6 +276,9 @@ export function renderEntryEditor(container, state, callbacks = {}) {
   let disposed = false;
   let saveTimer = null;
   let ledgerTimer = null;
+  let shrinkRaf = null;
+  let lastBodyLen = initialBody.length;
+  let lastNewlineCount = countNewlines(initialBody);
   let deleteConfirmOpen = false;
   let coverPopoverOpen = false;
   let coverPopoverAbort = null;
@@ -406,14 +418,42 @@ export function renderEntryEditor(container, state, callbacks = {}) {
     activeWaveformRibbons = [];
   };
 
-  const updateDatelineAndLedger = (immediate = false) => {
-    if (datelineTextEl) {
-      datelineTextEl.textContent = formatEntryDateLine(draft.date, draft.body);
+  const resizeTextareaForEdit = (el, forceMeasure = false) => {
+    if (!el) return;
+    const val = el.value;
+    const nextLen = val.length;
+    const nextNewlines = countNewlines(val);
+    if (forceMeasure) {
+      if (shrinkRaf) {
+        cancelAnimationFrame(shrinkRaf);
+        shrinkRaf = null;
+      }
+      measureTextareaHeight(el);
+    } else if (nextLen >= lastBodyLen && nextNewlines >= lastNewlineCount) {
+      const needed = Math.max(480, el.scrollHeight);
+      if (needed > el.clientHeight) {
+        el.style.height = `${needed}px`;
+      }
+    } else if (!shrinkRaf) {
+      shrinkRaf = requestAnimationFrame(() => {
+        shrinkRaf = null;
+        if (!disposed && textareaEl === el) {
+          measureTextareaHeight(el);
+        }
+      });
     }
+    lastBodyLen = nextLen;
+    lastNewlineCount = nextNewlines;
+  };
+
+  const updateDatelineAndLedger = (immediate = false) => {
     if (immediate) {
       if (ledgerTimer) {
         clearTimeout(ledgerTimer);
         ledgerTimer = null;
+      }
+      if (datelineTextEl) {
+        datelineTextEl.textContent = formatEntryDateLine(draft.date, draft.body);
       }
       if (ledgerContainer) renderLedger();
       if (connectionsContainer) renderConnections();
@@ -423,9 +463,12 @@ export function renderEntryEditor(container, state, callbacks = {}) {
     ledgerTimer = setTimeout(() => {
       ledgerTimer = null;
       if (disposed) return;
+      if (datelineTextEl) {
+        datelineTextEl.textContent = formatEntryDateLine(draft.date, draft.body);
+      }
       if (ledgerContainer) renderLedger();
       if (connectionsContainer) renderConnections();
-    }, 260);
+    }, 180);
   };
 
   const performSave = async () => {
@@ -507,6 +550,20 @@ export function renderEntryEditor(container, state, callbacks = {}) {
       }
     },
     { signal: lifecycleAbort.signal }
+  );
+
+  window.addEventListener(
+    "resize",
+    () => {
+      if (!textareaEl || mode !== "write" || shrinkRaf) return;
+      shrinkRaf = requestAnimationFrame(() => {
+        shrinkRaf = null;
+        if (!disposed && textareaEl && mode === "write") {
+          measureTextareaHeight(textareaEl);
+        }
+      });
+    },
+    { signal: lifecycleAbort.signal, passive: true }
   );
 
   // Hidden photo file picker
@@ -1121,7 +1178,7 @@ export function renderEntryEditor(container, state, callbacks = {}) {
         renderBlankPrompt();
         if (textareaEl) {
           textareaEl.value = draft.body;
-          autoSizeTextarea(textareaEl);
+          resizeTextareaForEdit(textareaEl, true);
           textareaEl.focus();
           textareaEl.setSelectionRange(draft.body.length, draft.body.length);
         }
@@ -1174,7 +1231,7 @@ export function renderEntryEditor(container, state, callbacks = {}) {
     const caret = start + insertion.length;
     textareaEl.focus();
     textareaEl.setSelectionRange(caret, caret);
-    autoSizeTextarea(textareaEl);
+    resizeTextareaForEdit(textareaEl, true);
     renderBlankPrompt();
     markDirtyAndScheduleSave();
   };
@@ -1195,7 +1252,7 @@ export function renderEntryEditor(container, state, callbacks = {}) {
       draft.body = cleared;
       textareaEl.value = cleared;
       textareaEl.setSelectionRange(start, start);
-      autoSizeTextarea(textareaEl);
+      resizeTextareaForEdit(textareaEl, true);
       markDirtyAndScheduleSave();
     }
 
@@ -1580,7 +1637,7 @@ export function renderEntryEditor(container, state, callbacks = {}) {
 
       textareaEl.addEventListener("input", () => {
         draft.body = textareaEl.value;
-        autoSizeTextarea(textareaEl);
+        resizeTextareaForEdit(textareaEl, false);
         renderBlankPrompt();
 
         const detected = detectSlashToken(textareaEl);
@@ -1622,7 +1679,7 @@ export function renderEntryEditor(container, state, callbacks = {}) {
       });
 
       proseRegionEl.appendChild(textareaEl);
-      requestAnimationFrame(() => autoSizeTextarea(textareaEl));
+      requestAnimationFrame(() => resizeTextareaForEdit(textareaEl, true));
     } else {
       textareaEl = null;
       slashState = null;
@@ -1993,6 +2050,10 @@ export function renderEntryEditor(container, state, callbacks = {}) {
       if (ledgerTimer) {
         clearTimeout(ledgerTimer);
         ledgerTimer = null;
+      }
+      if (shrinkRaf) {
+        cancelAnimationFrame(shrinkRaf);
+        shrinkRaf = null;
       }
       if (coverPopoverAbort) {
         coverPopoverAbort.abort();

@@ -107,11 +107,15 @@ export function renderSidebar(container, state, callbacks = {}) {
   nav.setAttribute("aria-label", "Journal views");
 
   for (const item of navItems) {
+    const isNavActive =
+      item.key === "timeline"
+        ? state.activeView === "timeline" &&
+          !state.selectedNotebookId &&
+          !state.selectedTag
+        : state.activeView === item.key;
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = `sidebar-nav-item${
-      state.activeView === item.key ? " is-active" : ""
-    }`;
+    btn.className = `sidebar-nav-item${isNavActive ? " is-active" : ""}`;
     btn.appendChild(iconEl(item.iconName, "log-icon"));
     const lbl = document.createElement("span");
     lbl.className = "sidebar-nav-label";
@@ -277,10 +281,13 @@ export function renderSidebar(container, state, callbacks = {}) {
   const nbList = document.createElement("div");
   nbList.className = "notebook-shelf-list";
 
+  const isTimelineView = state.activeView === "timeline";
   const allNbBtn = document.createElement("button");
   allNbBtn.type = "button";
   allNbBtn.className = `sidebar-notebook-item${
-    !state.selectedNotebookId ? " is-active" : ""
+    isTimelineView && !state.selectedNotebookId && !state.selectedTag
+      ? " is-active"
+      : ""
   }`;
   const allDot = document.createElement("span");
   allDot.className = "notebook-color-dot is-all";
@@ -298,7 +305,7 @@ export function renderSidebar(container, state, callbacks = {}) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = `sidebar-notebook-item${
-      state.selectedNotebookId === nb.id ? " is-active" : ""
+      isTimelineView && state.selectedNotebookId === nb.id ? " is-active" : ""
     }`;
 
     const dot = document.createElement("span");
