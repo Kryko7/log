@@ -3,18 +3,26 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
+#[cfg(target_os = "linux")]
+use std::process::{Command, Stdio};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+#[cfg(target_os = "linux")]
+use std::time::Duration;
+use std::time::Instant;
 
 use chrono::Local;
 use journal_core::Vault;
 use journal_types::VoiceMemoMeta;
+#[cfg(target_os = "linux")]
 use uuid::Uuid;
 
 pub const UNSUPPORTED_NATIVE_RECORDER_ERR: &str = "UNSUPPORTED_NATIVE_RECORDER";
+#[cfg(target_os = "linux")]
 const PROBE_SETTLE_WAIT: Duration = Duration::from_millis(80);
+#[cfg(target_os = "linux")]
 const STOP_GRACE_TIMEOUT: Duration = Duration::from_millis(1500);
+#[cfg(target_os = "linux")]
 const STOP_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const MIN_WAV_BYTES: usize = 45;
 
@@ -47,14 +55,6 @@ impl RecorderManager {
     /// Probes native Linux audio capture tools (`pw-record` -> `parecord` -> `arecord`)
     /// and starts capturing mono 48kHz 16-bit PCM WAV into a temporary file.
     pub fn start(&self) -> Result<String, String> {
-        let mut guard = self
-            .active
-            .lock()
-            .map_err(|_| "Recorder state lock poisoned".to_string())?;
-        if guard.is_some() {
-            return Err("Voice recording is already in progress".to_string());
-        }
-
         #[cfg(not(target_os = "linux"))]
         {
             return Err(UNSUPPORTED_NATIVE_RECORDER_ERR.to_string());
@@ -62,6 +62,13 @@ impl RecorderManager {
 
         #[cfg(target_os = "linux")]
         {
+            let mut guard = self
+                .active
+                .lock()
+                .map_err(|_| "Recorder state lock poisoned".to_string())?;
+            if guard.is_some() {
+                return Err("Voice recording is already in progress".to_string());
+            }
             let temp_path = std::env::temp_dir().join(format!("log-voice-{}.wav", Uuid::new_v4()));
             let Some(temp_str) = temp_path.to_str() else {
                 return Err("Temporary directory path is not valid UTF-8".to_string());
@@ -220,20 +227,18 @@ fn graceful_stop_child(child: &mut Child) {
         return;
     }
 
-    #[cfg(unix)]
-    if let Ok(pid) = libc::pid_t::try_from(child.id()) {
-        if pid > 0 {
-            // Send SIGINT so PipeWire/PulseAudio/ALSA recorders flush buffers and write WAV sizes.
-            unsafe {
-                libc::kill(pid, libc::SIGINT);
+    #[cfg(target_os = "linux")]
+    if let Some(pid) = libc::pid_t::try_from(child.id()).ok().filter(|&p| p > 0) {
+        // Send SIGINT so PipeWire/PulseAudio/ALSA recorders flush buffers and write WAV sizes.
+        unsafe {
+            libc::kill(pid, libc::SIGINT);
+        }
+        let deadline = Instant::now() + STOP_GRACE_TIMEOUT;
+        while Instant::now() < deadline {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                return;
             }
-            let deadline = Instant::now() + STOP_GRACE_TIMEOUT;
-            while Instant::now() < deadline {
-                if matches!(child.try_wait(), Ok(Some(_))) {
-                    return;
-                }
-                std::thread::sleep(STOP_POLL_INTERVAL);
-            }
+            std::thread::sleep(STOP_POLL_INTERVAL);
         }
     }
 
