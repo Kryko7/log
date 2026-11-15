@@ -1,34 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Non-destructive desktop launcher installer for the pure Tauri v2 Log Personal Journal.
+# Convenience wrapper delegating to scripts/install.sh --skip-build.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-DEST_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
-DEST_FILE="$DEST_DIR/log-journal.desktop"
-
-mkdir -p "$DEST_DIR"
-
-cat > "$DEST_FILE" <<EOF
-[Desktop Entry]
-Version=1.0
-Type=Application
-Name=Log — Personal Journal
-GenericName=Personal Journal
-Comment=Tactile, local-first Markdown journal with Tauri v2 and encrypted backup
-Exec=$APP_DIR/scripts/launch-wayland.sh
-Icon=$APP_DIR/ui/assets/svg/app-icon.svg
-Terminal=false
-Categories=Office;TextEditor;Utility;
-Keywords=journal;diary;markdown;notes;scrapbook;
-StartupNotify=true
-StartupWMClass=log-journal
-EOF
-
-chmod 0644 "$DEST_FILE"
-
-if command -v update-desktop-database >/dev/null 2>&1; then
-    update-desktop-database "$DEST_DIR" >/dev/null 2>&1 || true
-fi
-
-echo "Installed desktop launcher at $DEST_FILE"
+exec "$SCRIPT_DIR/install.sh" --skip-build "$@"

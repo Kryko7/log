@@ -45,7 +45,28 @@ cp /tmp/log-cargo-target/release/log-journal ./log-journal
 chmod +x ./log-journal
 ```
 
-### 3. Launch Desktop App (or Seed a Demo Vault)
+### 3. Install to App Launcher & Pin to Taskbar
+
+```bash
+# Build (or pass --skip-build if ./log-journal exists) and install:
+#   - ~/.local/bin/log-journal
+#   - ~/.local/share/applications/dev.logjournal.app.desktop
+#   - ~/.local/share/icons/hicolor/{32x32,128x128,256x256,512x512}/apps/dev.logjournal.app.png
+./scripts/install.sh
+```
+
+Or install directly from the compiled binary (`./log-journal install-desktop`), or build a system package on Arch Linux via `cd packaging/arch && makepkg -si`.
+
+Because `Log` registers `enableGTKAppId` (`dev.logjournal.app`) on Wayland/X11 matching `dev.logjournal.app.desktop` (`StartupWMClass=dev.logjournal.app`), it appears in your app launcher, keeps crisp taskbar icons, and supports pinning to the dock/taskbar.
+
+To uninstall:
+
+```bash
+./scripts/uninstall.sh
+# or: log-journal uninstall-desktop
+```
+
+### 4. Launch Desktop App (or Seed a Demo Vault)
 
 ```bash
 # Optional: populate an isolated demo vault first
@@ -60,6 +81,8 @@ chmod +x ./log-journal
 Global flag: `--vault <PATH>` (overrides `LOG_VAULT_DIR`; defaults to `~/Personal/JournalVault`).
 
 - `log-journal` or `log-journal launch` — Launch the native Tauri v2 desktop window.
+- `log-journal install-desktop [--bin-dir <DIR>] [--data-dir <DIR>]` — Install binary, XDG `.desktop` launcher (`dev.logjournal.app.desktop`), and hicolor icons.
+- `log-journal uninstall-desktop [--bin-dir <DIR>] [--data-dir <DIR>]` — Remove installed binary, `.desktop` file, and hicolor icons.
 - `log-journal seed-demo` — Populate an illustrative vault with notebooks, Polaroid photo + washi tape, 3-second synthesized voice memo, bidirectional `[[wikilinks]]`, and an "On This Day" entry from one year ago.
 - `log-journal import-dayone --zip <PATH> [--notebook <ID>] [--dry-run]` — Import a Day One `.zip` or `.json` export.
 - `log-journal import-notion --path <PATH> [--notebook <ID>] [--dry-run]` — Import a Notion folder/ZIP or MCP JSON snapshot, skipping entries already present from Day One.
@@ -74,8 +97,9 @@ Global flag: `--vault <PATH>` (overrides `LOG_VAULT_DIR`; defaults to `~/Persona
 ## Desktop Integration & Scripts
 
 - `scripts/install-arch-deps.sh` — Install `webkit2gtk-4.1` and GTK build dependencies on Arch Linux.
+- `scripts/install.sh` / `scripts/uninstall.sh` — Build and install/remove the XDG launcher (`dev.logjournal.app.desktop`), icons, and `~/.local/bin/log-journal`.
 - `scripts/launch-wayland.sh` — Launch `log-journal` with Wayland WebKitGTK DMABUF safety guard (`WEBKIT_DISABLE_DMABUF_RENDERER=1`).
-- `scripts/install-desktop-entry.sh` — Install `~/.local/share/applications/log-journal.desktop`.
+- `packaging/arch/PKGBUILD` — Arch Linux `makepkg` recipe for system-wide installation.
 - `scripts/import-all.sh` — Batch Day One + Notion migration helper.
 - `scripts/sync-cron.sh` / `scripts/nightly-backup.sh` — Automated `age`-encrypted vault backups and Google Drive sync.
 
@@ -83,5 +107,5 @@ Global flag: `--vault <PATH>` (overrides `LOG_VAULT_DIR`; defaults to `~/Persona
 
 ```bash
 cargo test --workspace
-node --check ui/src/*.js
+node scripts/check-ui.mjs
 ```

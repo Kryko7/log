@@ -6,6 +6,7 @@
 //! `backup`, `restore`) alongside the native GTK/Wayland Tauri v2 desktop window with
 //! `vault://` media streaming and all 23 `#[tauri::command]` IPC handlers.
 
+mod desktop;
 mod media_gen;
 mod seed;
 
@@ -100,6 +101,24 @@ enum Commands {
         passphrase_env: String,
         #[arg(long, default_value_t = true)]
         overwrite: bool,
+    },
+    /// Install the binary, hicolor icons, and Freedesktop `.desktop` launcher entry.
+    InstallDesktop {
+        /// Target directory for the executable (defaults to $XDG_BIN_HOME or ~/.local/bin).
+        #[arg(long, value_name = "DIR")]
+        bin_dir: Option<PathBuf>,
+        /// Base XDG data directory for icons and desktop file (defaults to $XDG_DATA_HOME or ~/.local/share).
+        #[arg(long, value_name = "DIR")]
+        data_dir: Option<PathBuf>,
+    },
+    /// Remove the installed binary, hicolor icons, and Freedesktop `.desktop` launcher entry.
+    UninstallDesktop {
+        /// Target directory for the executable (defaults to $XDG_BIN_HOME or ~/.local/bin).
+        #[arg(long, value_name = "DIR")]
+        bin_dir: Option<PathBuf>,
+        /// Base XDG data directory for icons and desktop file (defaults to $XDG_DATA_HOME or ~/.local/share).
+        #[arg(long, value_name = "DIR")]
+        data_dir: Option<PathBuf>,
     },
 }
 
@@ -772,6 +791,14 @@ fn run_cli_subcommand(cli_vault: Option<PathBuf>, cmd: Commands) -> Result<()> {
             }
             println!("{}", serde_json::to_string_pretty(&resp)?);
         }
+        Commands::InstallDesktop { bin_dir, data_dir } => {
+            let report = desktop::install_desktop(bin_dir, data_dir)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Commands::UninstallDesktop { bin_dir, data_dir } => {
+            let report = desktop::uninstall_desktop(bin_dir, data_dir)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
     }
     Ok(())
 }
@@ -803,6 +830,12 @@ fn main() {
                 })
                 .setup(|app| {
                     app.manage(state);
+                    if app.get_webview_window("main").is_none() {
+                        if let Some(window_cfg) = app.config().app.windows.first() {
+                            tauri::WebviewWindowBuilder::from_config(app.handle(), window_cfg)?
+                                .build()?;
+                        }
+                    }
                     Ok(())
                 })
                 .invoke_handler(tauri::generate_handler![
@@ -830,8 +863,17 @@ fn main() {
                     upload_photo,
                     upload_audio,
                 ])
-                .run(tauri::generate_context!())
-                .expect("error while running Log desktop application");
+                .build(tauri::generate_context!())
+                .expect("error while building Log desktop application")
+                .run(|app_handle, event| {
+                    if let tauri::RunEvent::Ready = event {
+                        if let Some(window) = app_handle.get_webview_window("main") {
+                            let _ = window.unminimize();
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                });
         }
         Some(cmd) => {
             if let Err(err) = run_cli_subcommand(cli.vault, cmd) {

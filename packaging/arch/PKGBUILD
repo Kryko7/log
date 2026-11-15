@@ -1,0 +1,61 @@
+# Maintainer: Log Authors
+pkgname=log-journal
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Tactile, local-first personal Markdown journal built with Tauri v2"
+arch=('x86_64')
+url="https://github.com/Kryko7/log"
+license=('MIT')
+depends=(
+  'webkit2gtk-4.1'
+  'gtk3'
+  'libsoup3'
+  'openssl'
+  'hicolor-icon-theme'
+)
+makedepends=(
+  'cargo'
+  'pkgconf'
+)
+
+build() {
+  local root_dir="${startdir}/../.."
+  cd "$root_dir"
+  export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/log-cargo-target}"
+  cargo build --locked --manifest-path src-tauri/Cargo.toml --release
+}
+
+package() {
+  local root_dir="${startdir}/../.."
+  local target_dir="${CARGO_TARGET_DIR:-/tmp/log-cargo-target}"
+
+  install -Dm755 "$target_dir/release/log-journal" "$pkgdir/usr/bin/log-journal"
+
+  install -Dm644 "$root_dir/src-tauri/icons/32x32.png" \
+    "$pkgdir/usr/share/icons/hicolor/32x32/apps/dev.logjournal.app.png"
+  install -Dm644 "$root_dir/src-tauri/icons/128x128.png" \
+    "$pkgdir/usr/share/icons/hicolor/128x128/apps/dev.logjournal.app.png"
+  install -Dm644 "$root_dir/src-tauri/icons/128x128@2x.png" \
+    "$pkgdir/usr/share/icons/hicolor/256x256/apps/dev.logjournal.app.png"
+  install -Dm644 "$root_dir/src-tauri/icons/icon.png" \
+    "$pkgdir/usr/share/icons/hicolor/512x512/apps/dev.logjournal.app.png"
+
+  install -dm755 "$pkgdir/usr/share/applications"
+  cat > "$pkgdir/usr/share/applications/dev.logjournal.app.desktop" <<'EOF'
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Log
+GenericName=Personal Journal
+Comment=Local-first personal Markdown journal
+Exec=/usr/bin/log-journal
+TryExec=/usr/bin/log-journal
+Icon=dev.logjournal.app
+Terminal=false
+Categories=Office;Utility;TextEditor;
+Keywords=journal;diary;markdown;notes;writing;log;
+StartupNotify=true
+StartupWMClass=dev.logjournal.app
+EOF
+  chmod 0644 "$pkgdir/usr/share/applications/dev.logjournal.app.desktop"
+}
