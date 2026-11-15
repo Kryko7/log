@@ -15,9 +15,11 @@ if [[ -z "$BIN" ]]; then
     elif command -v log-journal >/dev/null 2>&1; then
         BIN="$(command -v log-journal)"
     else
-        echo "Error: Tauri log-journal binary not found." >&2
-        echo "Build it with: CARGO_TARGET_DIR=/tmp/log-cargo-target cargo build --manifest-path src-tauri/Cargo.toml --release" >&2
-        exit 1
+        echo "log-journal binary not found; building Tauri v2 release binary..." >&2
+        CARGO_TARGET_DIR=/tmp/log-cargo-target cargo build --manifest-path "$REPO_ROOT/src-tauri/Cargo.toml" --release
+        cp /tmp/log-cargo-target/release/log-journal "$REPO_ROOT/log-journal"
+        chmod +x "$REPO_ROOT/log-journal"
+        BIN="$REPO_ROOT/log-journal"
     fi
 fi
 

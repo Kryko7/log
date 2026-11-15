@@ -2,6 +2,7 @@
 /target/
 /log-journal
 dist/
+src-tauri/gen/
 **/*.rs.bk
 
 # OS & editor junk
