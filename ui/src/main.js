@@ -56,10 +56,13 @@ const state = {
   backupConfig: {
     destination_dir: null,
     gdrive_folder: "LogJournal",
+    rclone_remote: null,
     auto_sync_enabled: false,
-    keep_last_n: 14,
+    keep_last_n: 3,
     has_passphrase_hint: null,
   },
+  gdriveStatus: null,
+  gdriveConnecting: false,
 };
 
 let shellEl = null;
@@ -646,9 +649,26 @@ async function openModal(modalName) {
     state.backupLoading = true;
     renderModal();
     try {
-      state.backups = await api.listBackups();
-    } catch (err) {
-      state.backupError = err?.message || "Failed to list backups.";
+      const [backupsRes, cfgRes, statusRes] = await Promise.allSettled([
+        api.listBackups(),
+        api.getBackupConfig(),
+        api.getGdriveStatus(),
+      ]);
+      if (backupsRes.status === "fulfilled" && Array.isArray(backupsRes.value)) {
+        state.backups = backupsRes.value;
+      } else if (backupsRes.status === "rejected") {
+        state.backupError =
+          backupsRes.reason?.message || "Failed to list backups.";
+      }
+      if (cfgRes.status === "fulfilled" && cfgRes.value) {
+        state.backupConfig = {
+          ...state.backupConfig,
+          ...cfgRes.value,
+        };
+      }
+      if (statusRes.status === "fulfilled" && statusRes.value) {
+        state.gdriveStatus = statusRes.value;
+      }
     } finally {
       state.backupLoading = false;
       if (state.activeModal === "backup") renderModal();
@@ -787,6 +807,42 @@ function renderModal() {
   }
 
   if (state.activeModal === "backup") {
+    const runSync = async ({ passphrase = null, backup_id = null } = {}) => {
+      state.backupLoading = true;
+      state.backupError = null;
+      state.syncResult = null;
+      renderModal();
+      try {
+        const res = await api.syncGdrive({
+          passphrase: passphrase || null,
+          backup_id: backup_id || null,
+          config: state.backupConfig,
+        });
+        state.syncResult = res;
+        state.backups = await api.listBackups();
+      } catch (err) {
+        state.backupError = err?.message || "Google Drive sync failed.";
+      } finally {
+        state.backupLoading = false;
+        if (state.activeModal === "backup") renderModal();
+      }
+    };
+
+    const runGdriveConnect = async (action, fallbackErr) => {
+      state.gdriveConnecting = true;
+      state.backupError = null;
+      state.syncResult = null;
+      renderModal();
+      try {
+        await action();
+      } catch (err) {
+        state.backupError = err?.message || fallbackErr;
+      } finally {
+        state.gdriveConnecting = false;
+        if (state.activeModal === "backup") renderModal();
+      }
+    };
+
     renderBackupModal(modalRoot, state, {
       onCreateBackup: async (passphrase, uploadGdrive) => {
         if (!passphrase) {
@@ -812,22 +868,69 @@ function renderModal() {
           if (state.activeModal === "backup") renderModal();
         }
       },
-      onSyncGdrive: async (passphrase) => {
+      onSyncGdrive: (passphrase) =>
+        runSync({ passphrase: passphrase || null, backup_id: null }),
+      onSyncBackupById: (backupId) =>
+        runSync({ passphrase: null, backup_id: backupId }),
+      onSaveBackupConfig: async (nextCfg) => {
         state.backupLoading = true;
         state.backupError = null;
         state.syncResult = null;
         renderModal();
         try {
-          const res = await api.syncGdrive(passphrase || null, state.backupConfig);
-          state.syncResult = res;
-          state.backups = await api.listBackups();
+          const saved = await api.saveBackupConfig(nextCfg);
+          if (saved) state.backupConfig = saved;
+          state.gdriveStatus = await api.getGdriveStatus(state.backupConfig);
+          state.syncResult = {
+            success: true,
+            message: "Backup preferences saved.",
+          };
         } catch (err) {
-          state.backupError = err?.message || "Google Drive sync failed.";
+          state.backupError = err?.message || "Failed to save preferences.";
         } finally {
           state.backupLoading = false;
           if (state.activeModal === "backup") renderModal();
         }
       },
+      onConnectRclone: (remoteName) =>
+        runGdriveConnect(async () => {
+          state.gdriveStatus = await api.connectGdriveRclone(remoteName);
+          const cfg = await api.getBackupConfig();
+          if (cfg) state.backupConfig = cfg;
+          state.syncResult = {
+            success: true,
+            message:
+              state.gdriveStatus?.detail ||
+              "Connected Google Drive via rclone.",
+          };
+        }, "rclone Google Drive connection failed."),
+      onConnectOauth: ({ client_id, client_secret }) =>
+        runGdriveConnect(async () => {
+          state.gdriveStatus = await api.connectGdriveOauth({
+            client_id,
+            client_secret,
+          });
+          state.syncResult = {
+            success: true,
+            message:
+              state.gdriveStatus?.detail ||
+              "Connected Google Drive via Google OAuth.",
+          };
+        }, "Google OAuth sign-in failed."),
+      onSaveToken: (token) =>
+        runGdriveConnect(async () => {
+          state.gdriveStatus = await api.saveGdriveToken(token);
+          state.syncResult = {
+            success: true,
+            message:
+              state.gdriveStatus?.detail ||
+              "Google Drive access token verified and saved.",
+          };
+        }, "Failed to save Google Drive token."),
+      onDisconnectGdrive: () =>
+        runGdriveConnect(async () => {
+          state.gdriveStatus = await api.disconnectGdrive();
+        }, "Failed to disconnect Google Drive."),
       onRestoreBackup: async (backupId, passphrase) => {
         if (!passphrase) {
           state.backupError = "Enter the backup passphrase to restore.";
@@ -862,9 +965,19 @@ function renderModal() {
         state.backupError = null;
         renderModal();
         try {
-          state.backups = await api.listBackups();
-        } catch (err) {
-          state.backupError = err?.message || "Failed to refresh backups.";
+          const [backupsRes, statusRes] = await Promise.allSettled([
+            api.listBackups(),
+            api.getGdriveStatus(state.backupConfig),
+          ]);
+          if (backupsRes.status === "fulfilled" && Array.isArray(backupsRes.value)) {
+            state.backups = backupsRes.value;
+          } else if (backupsRes.status === "rejected") {
+            state.backupError =
+              backupsRes.reason?.message || "Failed to refresh backups.";
+          }
+          if (statusRes.status === "fulfilled" && statusRes.value) {
+            state.gdriveStatus = statusRes.value;
+          }
         } finally {
           state.backupLoading = false;
           if (state.activeModal === "backup") renderModal();

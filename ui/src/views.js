@@ -1795,17 +1795,167 @@ export function renderMigrationModal(container, state, callbacks = {}) {
   container.appendChild(backdrop);
 }
 
+function formatGdriveMethodLabel(method) {
+  switch (method) {
+    case "oauth":
+      return "Google OAuth";
+    case "rclone":
+      return "rclone";
+    case "token":
+      return "Access Token";
+    case "env_token":
+      return "Env Token";
+    case "gdrive_cli":
+      return "gdrive CLI";
+    default:
+      return "Configured";
+  }
+}
+
+function renderGdriveRcloneSlot(slot, state, getCallbacks, getSelectedRemote, setSelectedRemote) {
+  slot.innerHTML = "";
+  const status = state.gdriveStatus;
+  const connecting = Boolean(state.gdriveConnecting);
+
+  if (status?.has_rclone) {
+    const remotes = status.rclone_remotes || [];
+    if (remotes.length > 0) {
+      const row = el("div", "gdrive-inline-row");
+      const select = document.createElement("select");
+      select.className = "editorial-select";
+      select.setAttribute("aria-label", "rclone remote");
+      const emptyOpt = document.createElement("option");
+      emptyOpt.value = "";
+      emptyOpt.textContent = "None (disabled)";
+      select.appendChild(emptyOpt);
+      for (const r of remotes) {
+        const opt = document.createElement("option");
+        opt.value = r;
+        opt.textContent = r;
+        select.appendChild(opt);
+      }
+      const curRemote = getSelectedRemote();
+      if (curRemote && remotes.includes(curRemote)) {
+        select.value = curRemote;
+      } else if (curRemote === "") {
+        select.value = "";
+      } else if (state.backupConfig?.rclone_remote && remotes.includes(state.backupConfig.rclone_remote)) {
+        select.value = state.backupConfig.rclone_remote;
+        setSelectedRemote(select.value);
+      } else {
+        select.value = remotes[0] || "";
+        setSelectedRemote(select.value);
+      }
+      select.addEventListener("change", () => {
+        setSelectedRemote(select.value);
+      });
+
+      const signBtn = el("button", "btn-editorial btn-sage small");
+      signBtn.type = "button";
+      signBtn.disabled = connecting;
+      signBtn.textContent = connecting
+        ? "Waiting for browser..."
+        : "Sign in New Google Account (rclone)";
+      signBtn.addEventListener("click", () => {
+        getCallbacks()?.onConnectRclone?.("logjournal");
+      });
+      row.append(select, signBtn);
+      slot.appendChild(row);
+    } else {
+      const btn = el("button", "btn-editorial btn-sage small");
+      btn.type = "button";
+      btn.disabled = connecting;
+      btn.innerHTML = `${icon("upload", "tiny-icon")}<span>${
+        connecting
+          ? "Waiting for browser sign-in..."
+          : "Connect Google Drive in Browser (rclone)"
+      }</span>`;
+      btn.addEventListener("click", () => {
+        getCallbacks()?.onConnectRclone?.("logjournal");
+      });
+      slot.appendChild(btn);
+    }
+  } else {
+    slot.appendChild(
+      el(
+        "p",
+        "panel-note",
+        "Install rclone (sudo pacman -S rclone) then click Refresh for 1-click Google browser sign-in without a Client ID — or connect directly below."
+      )
+    );
+  }
+}
+
+function renderGdriveStatusBar(bar, state, isConfigOpen, onToggleConfig, getCallbacks) {
+  bar.innerHTML = "";
+  const status = state.gdriveStatus;
+  const connected = Boolean(status?.connected);
+
+  const info = el("div", "gdrive-status-info");
+  const titleRow = el("div", "gdrive-status-title-row");
+  const dot = el(
+    "span",
+    `gdrive-status-dot ${connected ? "is-connected" : "is-disconnected"}`
+  );
+  titleRow.appendChild(dot);
+
+  if (!status) {
+    titleRow.appendChild(el("span", "gdrive-status-label", "Checking Google Drive…"));
+  } else if (connected) {
+    const methodLabel = formatGdriveMethodLabel(status.method);
+    const hint = status.account_hint ? ` · ${status.account_hint}` : "";
+    titleRow.appendChild(
+      el("span", "gdrive-status-label", `Connected (${methodLabel}${hint})`)
+    );
+  } else {
+    titleRow.appendChild(el("span", "gdrive-status-label", "Google Drive: Not connected"));
+  }
+  info.appendChild(titleRow);
+
+  if (status?.detail) {
+    info.appendChild(el("p", "panel-note", status.detail));
+  }
+
+  const actions = el("div", "gdrive-status-actions");
+  if (connected && (status.method === "oauth" || status.method === "token")) {
+    const discBtn = el("button", "btn-editorial btn-ghost small is-danger", "Disconnect");
+    discBtn.type = "button";
+    discBtn.disabled = Boolean(state.gdriveConnecting || state.backupLoading);
+    discBtn.addEventListener("click", () => {
+      getCallbacks()?.onDisconnectGdrive?.();
+    });
+    actions.appendChild(discBtn);
+  }
+
+  const cfgBtn = el(
+    "button",
+    "btn-editorial small",
+    isConfigOpen ? "Hide Settings" : "Configure"
+  );
+  cfgBtn.type = "button";
+  cfgBtn.addEventListener("click", onToggleConfig);
+  actions.appendChild(cfgBtn);
+
+  bar.append(info, actions);
+}
+
 function renderBackupDynamicRegion(region, state, getPassphrase, getCallbacks) {
   region.innerHTML = "";
   if (state.backupError) {
     region.appendChild(el("p", "form-error", state.backupError));
   }
   if (state.syncResult?.message) {
-    const banner = el(
-      "p",
-      `modal-status-banner ${state.syncResult.success ? "is-success" : ""}`.trim()
-    );
-    banner.innerHTML = `${icon("check")}<span>${escapeHtml(state.syncResult.message)}</span>`;
+    const isWarning = state.syncResult.uploaded_remote === false;
+    const isSuccess = Boolean(state.syncResult.success) && !isWarning;
+    const bannerClass = isWarning
+      ? "modal-status-banner is-warning"
+      : isSuccess
+      ? "modal-status-banner is-success"
+      : "modal-status-banner";
+    const banner = el("p", bannerClass);
+    banner.innerHTML = `${icon(isWarning ? "shield" : "check")}<span>${escapeHtml(
+      state.syncResult.message
+    )}</span>`;
     region.appendChild(banner);
   }
 
@@ -1844,6 +1994,18 @@ function renderBackupDynamicRegion(region, state, getPassphrase, getCallbacks) {
 
       const acts = el("div", "backup-item-actions");
       acts.appendChild(el("span", "small-caps-meta", b.location || "local"));
+
+      if (b.location !== "gdrive" && getCallbacks()?.onSyncBackupById) {
+        const upBtn = el("button", "btn-editorial small");
+        upBtn.type = "button";
+        upBtn.disabled = Boolean(state.backupLoading);
+        upBtn.innerHTML = `${icon("upload", "tiny-icon")}<span>Upload to Drive</span>`;
+        upBtn.addEventListener("click", () => {
+          getCallbacks()?.onSyncBackupById?.(b.id);
+        });
+        acts.appendChild(upBtn);
+      }
+
       const restoreBtn = el("button", "btn-editorial small", "Restore");
       restoreBtn.type = "button";
       restoreBtn.disabled = Boolean(state.backupLoading);
@@ -1870,6 +2032,14 @@ export function renderBackupModal(container, state, callbacks = {}) {
   container.__backupCallbacks = callbacks;
   const gdriveFolder = state.backupConfig?.gdrive_folder || "LogJournal";
   const existing = container.querySelector('[data-log-modal="backup"]');
+
+  const resolveConfigOpen = () => {
+    if (typeof container.__backupConfigOpen === "boolean") {
+      return container.__backupConfigOpen;
+    }
+    return Boolean(state.gdriveStatus && !state.gdriveStatus.connected);
+  };
+
   if (existing) {
     const passInput = existing.querySelector('[data-role="backup-passphrase"]');
     const snapBtn = existing.querySelector('[data-role="backup-snap"]');
@@ -1878,6 +2048,71 @@ export function renderBackupModal(container, state, callbacks = {}) {
     if (snapBtn) snapBtn.disabled = Boolean(state.backupLoading);
     if (syncBtn) syncBtn.disabled = Boolean(state.backupLoading);
     if (syncLabel) syncLabel.textContent = `Sync to Google Drive (${gdriveFolder})`;
+
+    const configOpen = resolveConfigOpen();
+    const statusBar = existing.querySelector('[data-role="gdrive-status-bar"]');
+    const configCard = existing.querySelector('[data-role="gdrive-config-card"]');
+    if (statusBar) {
+      renderGdriveStatusBar(
+        statusBar,
+        state,
+        configOpen,
+        () => {
+          container.__backupConfigOpen = !resolveConfigOpen();
+          renderBackupModal(container, state, container.__backupCallbacks);
+        },
+        () => container.__backupCallbacks
+      );
+    }
+    if (configCard) {
+      configCard.hidden = !configOpen;
+      const rcloneSlot = configCard.querySelector('[data-role="gdrive-rclone-slot"]');
+      if (rcloneSlot) {
+        renderGdriveRcloneSlot(
+          rcloneSlot,
+          state,
+          () => container.__backupCallbacks,
+          () => container.__backupSelectedRemote ?? "",
+          (v) => {
+            container.__backupSelectedRemote = v;
+          }
+        );
+      }
+
+      const clientIdInput = configCard.querySelector('[data-role="gdrive-client-id"]');
+      const oauthBtn = configCard.querySelector('[data-role="gdrive-oauth-btn"]');
+      const tokenBtn = configCard.querySelector('[data-role="gdrive-token-btn"]');
+      const folderInput = configCard.querySelector('[data-role="backup-cfg-folder"]');
+      const destInput = configCard.querySelector('[data-role="backup-cfg-dest"]');
+      const keepInput = configCard.querySelector('[data-role="backup-cfg-keep"]');
+      const savePrefBtn = configCard.querySelector('[data-role="backup-cfg-save"]');
+
+      if (clientIdInput && !clientIdInput.value && state.gdriveStatus?.saved_client_id) {
+        clientIdInput.value = state.gdriveStatus.saved_client_id;
+      }
+      if (oauthBtn) {
+        oauthBtn.disabled = Boolean(state.gdriveConnecting);
+        oauthBtn.textContent = state.gdriveConnecting
+          ? "Signing in..."
+          : "Sign in with Browser";
+      }
+      if (tokenBtn) {
+        tokenBtn.disabled = Boolean(state.gdriveConnecting);
+      }
+      if (savePrefBtn) {
+        savePrefBtn.disabled = Boolean(state.backupLoading);
+      }
+      if (folderInput && document.activeElement !== folderInput) {
+        folderInput.value = state.backupConfig?.gdrive_folder || "LogJournal";
+      }
+      if (destInput && document.activeElement !== destInput) {
+        destInput.value = state.backupConfig?.destination_dir || "";
+      }
+      if (keepInput && document.activeElement !== keepInput) {
+        keepInput.value = String(state.backupConfig?.keep_last_n ?? 3);
+      }
+    }
+
     const region = existing.querySelector('[data-region="backup-dynamic"]');
     if (region) {
       renderBackupDynamicRegion(
@@ -1894,6 +2129,8 @@ export function renderBackupModal(container, state, callbacks = {}) {
   }
 
   container.innerHTML = "";
+  delete container.__backupConfigOpen;
+  container.__backupSelectedRemote = state.backupConfig?.rclone_remote ?? null;
   let showPassphrase = false;
 
   const backdrop = el("div", "editorial-modal-backdrop");
@@ -1959,6 +2196,8 @@ export function renderBackupModal(container, state, callbacks = {}) {
   syncBtn.type = "button";
   syncBtn.dataset.role = "backup-sync";
   syncBtn.disabled = Boolean(state.backupLoading);
+  syncBtn.title =
+    "Leave passphrase empty to upload the latest existing .age snapshot without creating a duplicate archive.";
   syncBtn.innerHTML = `${icon("upload")}<span data-role="backup-sync-label">Sync to Google Drive (${escapeHtml(
     gdriveFolder
   )})</span>`;
@@ -1973,7 +2212,202 @@ export function renderBackupModal(container, state, callbacks = {}) {
 
   actionRow.append(snapBtn, syncBtn);
   passBox.appendChild(actionRow);
+  passBox.appendChild(
+    el(
+      "p",
+      "panel-note",
+      "Tip: Leave passphrase empty and click Sync to upload your latest local .age snapshot without creating a duplicate archive."
+    )
+  );
   body.appendChild(passBox);
+
+  // Google Drive Connection Status Bar & Collapsible Configure Panel
+  const gdriveSection = el("section", "gdrive-section");
+  const statusBar = el("div", "gdrive-status-bar");
+  statusBar.dataset.role = "gdrive-status-bar";
+
+  const configOpen = resolveConfigOpen();
+  const configCard = el("div", "gdrive-config-card");
+  configCard.dataset.role = "gdrive-config-card";
+  configCard.hidden = !configOpen;
+
+  renderGdriveStatusBar(
+    statusBar,
+    state,
+    configOpen,
+    () => {
+      container.__backupConfigOpen = !resolveConfigOpen();
+      const openNow = container.__backupConfigOpen;
+      configCard.hidden = !openNow;
+      renderGdriveStatusBar(
+        statusBar,
+        state,
+        openNow,
+        () => {
+          container.__backupConfigOpen = !resolveConfigOpen();
+          renderBackupModal(container, state, container.__backupCallbacks);
+        },
+        () => container.__backupCallbacks
+      );
+    },
+    () => container.__backupCallbacks
+  );
+  gdriveSection.appendChild(statusBar);
+
+  // 1. rclone quick browser sign-in
+  const rcloneGroup = el("div", "gdrive-config-group");
+  rcloneGroup.appendChild(
+    el(
+      "span",
+      "small-caps-meta",
+      "1. Quick Browser Sign-In via rclone (Recommended on Linux — no Client ID needed)"
+    )
+  );
+  const rcloneSlot = el("div", "gdrive-rclone-slot");
+  rcloneSlot.dataset.role = "gdrive-rclone-slot";
+  renderGdriveRcloneSlot(
+    rcloneSlot,
+    state,
+    () => container.__backupCallbacks,
+    () => container.__backupSelectedRemote ?? "",
+    (v) => {
+      container.__backupSelectedRemote = v;
+    }
+  );
+  rcloneGroup.appendChild(rcloneSlot);
+  configCard.appendChild(rcloneGroup);
+
+  // 2. Direct Google OAuth 2.0 Browser Sign-In (Built-in PKCE)
+  const oauthGroup = el("div", "gdrive-config-group");
+  oauthGroup.appendChild(
+    el(
+      "span",
+      "small-caps-meta",
+      "2. Direct Google OAuth 2.0 Browser Sign-In (Built-in PKCE, no external CLI)"
+    )
+  );
+  const oauthInputs = el("div", "gdrive-inline-row");
+  const clientIdInput = document.createElement("input");
+  clientIdInput.type = "text";
+  clientIdInput.className = "editorial-input";
+  clientIdInput.dataset.role = "gdrive-client-id";
+  clientIdInput.placeholder = "Google OAuth Client ID (Desktop app)";
+  clientIdInput.value = state.gdriveStatus?.saved_client_id || "";
+
+  const clientSecretInput = document.createElement("input");
+  clientSecretInput.type = "password";
+  clientSecretInput.className = "editorial-input";
+  clientSecretInput.placeholder = "Client Secret (optional)";
+
+  const oauthBtn = el(
+    "button",
+    "btn-editorial small",
+    state.gdriveConnecting ? "Signing in..." : "Sign in with Browser"
+  );
+  oauthBtn.type = "button";
+  oauthBtn.dataset.role = "gdrive-oauth-btn";
+  oauthBtn.disabled = Boolean(state.gdriveConnecting);
+  oauthBtn.addEventListener("click", () => {
+    container.__backupCallbacks?.onConnectOauth?.({
+      client_id: clientIdInput.value.trim(),
+      client_secret: clientSecretInput.value.trim() || null,
+    });
+  });
+  oauthInputs.append(clientIdInput, clientSecretInput, oauthBtn);
+  oauthGroup.appendChild(oauthInputs);
+  configCard.appendChild(oauthGroup);
+
+  // 3. Direct OAuth Access Token
+  const tokenGroup = el("div", "gdrive-config-group");
+  tokenGroup.appendChild(el("span", "small-caps-meta", "3. Direct OAuth Access Token"));
+  const tokenRow = el("div", "gdrive-inline-row");
+  const tokenInput = document.createElement("input");
+  tokenInput.type = "password";
+  tokenInput.className = "editorial-input";
+  tokenInput.placeholder = "Paste Google Drive OAuth access token…";
+  const tokenBtn = el("button", "btn-editorial small", "Save Token");
+  tokenBtn.type = "button";
+  tokenBtn.dataset.role = "gdrive-token-btn";
+  tokenBtn.disabled = Boolean(state.gdriveConnecting);
+  tokenBtn.addEventListener("click", () => {
+    const t = tokenInput.value.trim();
+    if (t) container.__backupCallbacks?.onSaveToken?.(t);
+  });
+  tokenRow.append(tokenInput, tokenBtn);
+  tokenGroup.appendChild(tokenRow);
+  configCard.appendChild(tokenGroup);
+
+  // 4. Backup Preferences
+  const prefGroup = el("div", "gdrive-config-group");
+  prefGroup.appendChild(el("span", "small-caps-meta", "4. Backup Preferences"));
+  const prefGrid = el("div", "backup-pref-grid");
+
+  const folderField = el("label", "backup-pref-field");
+  folderField.appendChild(el("span", "backup-pref-label", "Google Drive Folder"));
+  const folderInput = document.createElement("input");
+  folderInput.type = "text";
+  folderInput.className = "editorial-input";
+  folderInput.dataset.role = "backup-cfg-folder";
+  folderInput.value = state.backupConfig?.gdrive_folder || "LogJournal";
+  folderField.appendChild(folderInput);
+
+  const destField = el("label", "backup-pref-field");
+  destField.appendChild(
+    el("span", "backup-pref-label", "Local / Cloud Mirror Directory")
+  );
+  const destInput = document.createElement("input");
+  destInput.type = "text";
+  destInput.className = "editorial-input";
+  destInput.dataset.role = "backup-cfg-dest";
+  destInput.placeholder = "~/GoogleDrive/LogJournal (optional)";
+  destInput.value = state.backupConfig?.destination_dir || "";
+  destField.appendChild(destInput);
+
+  const keepField = el("label", "backup-pref-field is-narrow");
+  keepField.appendChild(
+    el("span", "backup-pref-label", "Keep Last N Local Snapshots")
+  );
+  const keepInput = document.createElement("input");
+  keepInput.type = "number";
+  keepInput.min = "1";
+  keepInput.max = "50";
+  keepInput.className = "editorial-input";
+  keepInput.dataset.role = "backup-cfg-keep";
+  keepInput.value = String(state.backupConfig?.keep_last_n ?? 3);
+  keepField.appendChild(keepInput);
+
+  prefGrid.append(folderField, destField, keepField);
+  prefGroup.appendChild(prefGrid);
+
+  const prefActions = el("div", "backup-pref-actions");
+  const savePrefBtn = el("button", "btn-editorial btn-sage small", "Save Preferences");
+  savePrefBtn.type = "button";
+  savePrefBtn.dataset.role = "backup-cfg-save";
+  savePrefBtn.disabled = Boolean(state.backupLoading);
+  savePrefBtn.addEventListener("click", () => {
+    const parsedKeep = Math.min(
+      Math.max(Number.parseInt(keepInput.value || "3", 10) || 3, 1),
+      50
+    );
+    const remoteVal =
+      typeof container.__backupSelectedRemote === "string"
+        ? container.__backupSelectedRemote.trim() || null
+        : state.backupConfig?.rclone_remote ?? null;
+    container.__backupCallbacks?.onSaveBackupConfig?.({
+      destination_dir: destInput.value.trim() || null,
+      gdrive_folder: folderInput.value.trim() || "LogJournal",
+      auto_sync_enabled: Boolean(state.backupConfig?.auto_sync_enabled),
+      keep_last_n: parsedKeep,
+      has_passphrase_hint: state.backupConfig?.has_passphrase_hint ?? null,
+      rclone_remote: remoteVal,
+    });
+  });
+  prefActions.appendChild(savePrefBtn);
+  prefGroup.appendChild(prefActions);
+  configCard.appendChild(prefGroup);
+
+  gdriveSection.appendChild(configCard);
+  body.appendChild(gdriveSection);
 
   const dynRegion = document.createElement("div");
   dynRegion.dataset.region = "backup-dynamic";

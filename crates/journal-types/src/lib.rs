@@ -549,6 +549,8 @@ pub struct BackupConfig {
     #[serde(alias = "keep_local_snapshots")]
     pub keep_last_n: usize,
     pub has_passphrase_hint: Option<String>,
+    #[serde(default)]
+    pub rclone_remote: Option<String>,
 }
 
 impl Default for BackupConfig {
@@ -557,8 +559,9 @@ impl Default for BackupConfig {
             destination_dir: None,
             gdrive_folder: "LogJournal".to_string(),
             auto_sync_enabled: false,
-            keep_last_n: 14,
+            keep_last_n: 3,
             has_passphrase_hint: None,
+            rclone_remote: None,
         }
     }
 }
@@ -572,6 +575,29 @@ pub struct SyncResult {
     pub uploaded_remote: bool,
     pub message: String,
     pub synced_at: DateTime<Utc>,
+}
+
+/// Current Google Drive connection status and available authentication methods.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GdriveAuthStatus {
+    pub connected: bool,
+    /// `"oauth"` | `"token"` | `"rclone"` | `"gdrive_cli"` | `"env_token"` | `"none"`
+    pub method: String,
+    pub account_hint: Option<String>,
+    pub detail: String,
+    pub has_rclone: bool,
+    pub rclone_remotes: Vec<String>,
+    pub has_gdrive_cli: bool,
+    pub saved_client_id: Option<String>,
+}
+
+/// Request to connect Google Drive via built-in browser OAuth 2.0 PKCE flow.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ConnectGdriveOauthRequest {
+    pub client_id: String,
+    pub client_secret: Option<String>,
 }
 
 /// Read-only Google Calendar event distilled into a private writing prompt.
@@ -1096,13 +1122,45 @@ mod tests {
     fn backup_config_deserializes_partial_and_legacy_alias() {
         let empty: BackupConfig = serde_json::from_str("{}").expect("empty BackupConfig");
         assert_eq!(empty, BackupConfig::default());
+        assert_eq!(empty.keep_last_n, 3);
+        assert_eq!(empty.rclone_remote, None);
 
-        let legacy: BackupConfig =
-            serde_json::from_str(r#"{"gdrive_folder":"CustomFolder","keep_local_snapshots":7}"#)
-                .expect("legacy keep_local_snapshots alias");
+        let legacy: BackupConfig = serde_json::from_str(
+            r#"{"gdrive_folder":"CustomFolder","keep_local_snapshots":7,"rclone_remote":"logjournal"}"#,
+        )
+        .expect("legacy keep_local_snapshots alias");
         assert_eq!(legacy.gdrive_folder, "CustomFolder");
         assert_eq!(legacy.keep_last_n, 7);
+        assert_eq!(legacy.rclone_remote.as_deref(), Some("logjournal"));
         assert!(!legacy.auto_sync_enabled);
         assert_eq!(legacy.destination_dir, None);
+    }
+
+    #[test]
+    fn round_trip_gdrive_auth_types() {
+        let status = GdriveAuthStatus {
+            connected: true,
+            method: "oauth".into(),
+            account_hint: Some("user@example.com".into()),
+            detail: "Connected via Google OAuth".into(),
+            has_rclone: true,
+            rclone_remotes: vec!["logjournal".into()],
+            has_gdrive_cli: false,
+            saved_client_id: Some("12345.apps.googleusercontent.com".into()),
+        };
+        let oauth_req = ConnectGdriveOauthRequest {
+            client_id: "12345.apps.googleusercontent.com".into(),
+            client_secret: Some("secret-value".into()),
+        };
+        round_trip(&status);
+        round_trip(&oauth_req);
+        assert_eq!(
+            serde_json::from_str::<GdriveAuthStatus>("{}").unwrap(),
+            GdriveAuthStatus::default()
+        );
+        assert_eq!(
+            serde_json::from_str::<ConnectGdriveOauthRequest>("{}").unwrap(),
+            ConnectGdriveOauthRequest::default()
+        );
     }
 }

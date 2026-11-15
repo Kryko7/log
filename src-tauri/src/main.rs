@@ -3,8 +3,8 @@
 //! Pure Tauri v2 desktop application & CLI (`log-journal`) for **Log**.
 //!
 //! Supports headless CLI administration (`seed-demo`, `import-dayone`, `import-notion`,
-//! `backup`, `restore`) alongside the native GTK/Wayland Tauri v2 desktop window with
-//! `vault://` media streaming and all 28 `#[tauri::command]` IPC handlers.
+//! `backup`, `restore`, `sync`) alongside the native GTK/Wayland Tauri v2 desktop window
+//! with `vault://` media streaming and all 35 `#[tauri::command]` IPC handlers.
 
 mod audio_rec;
 mod desktop;
@@ -23,17 +23,22 @@ use clap::{Parser, Subcommand};
 use journal_core::Vault;
 use journal_import::{import_dayone as core_import_dayone, import_notion as core_import_notion};
 use journal_sync::{
-    create_backup as core_create_backup, get_daily_context as core_get_daily_context,
-    list_backups as core_list_backups, restore_backup as core_restore_backup,
-    sync_gdrive as core_sync_gdrive,
+    connect_gdrive_oauth as core_connect_gdrive_oauth,
+    connect_gdrive_rclone as core_connect_gdrive_rclone, create_backup as core_create_backup,
+    disconnect_gdrive as core_disconnect_gdrive, get_daily_context as core_get_daily_context,
+    get_gdrive_status as core_get_gdrive_status, list_backups as core_list_backups,
+    load_backup_config as core_load_backup_config, restore_backup as core_restore_backup,
+    save_backup_config as core_save_backup_config, save_gdrive_token as core_save_gdrive_token,
+    sync_gdrive_with_target as core_sync_gdrive_with_target,
 };
 use journal_types::{
     AssetManifest, BacklinkRef, BackupConfig, BackupInfo, CalendarDaySummary,
-    CreateNotebookRequest, DailyContext, DeleteEntryResponse, DeleteNotebookResponse, Entry,
-    EntrySummary, GeoLocation, ImportDayOneRequest, ImportNotionRequest, MigrationReport, Notebook,
-    OnThisDayGroup, PolaroidMeta, RestoreBackupRequest, RestoreBackupResponse, SaveEntryRequest,
-    SearchHit, SearchQuery, StampPlacement, SyncResult, TagCount, Template, UpdateNotebookRequest,
-    VaultStats, VoiceMemoMeta, WeatherInfo,
+    ConnectGdriveOauthRequest, CreateNotebookRequest, DailyContext, DeleteEntryResponse,
+    DeleteNotebookResponse, Entry, EntrySummary, GdriveAuthStatus, GeoLocation,
+    ImportDayOneRequest, ImportNotionRequest, MigrationReport, Notebook, OnThisDayGroup,
+    PolaroidMeta, RestoreBackupRequest, RestoreBackupResponse, SaveEntryRequest, SearchHit,
+    SearchQuery, StampPlacement, SyncResult, TagCount, Template, UpdateNotebookRequest, VaultStats,
+    VoiceMemoMeta, WeatherInfo,
 };
 use tauri::{Manager, State};
 use uuid::Uuid;
@@ -116,6 +121,15 @@ enum Commands {
             action = clap::ArgAction::Set
         )]
         overwrite: bool,
+    },
+    /// Upload an existing encrypted backup (or newest snapshot) to Google Drive.
+    Sync {
+        /// Optional backup ID or filename to upload (defaults to newest snapshot).
+        #[arg(long, value_name = "ID")]
+        backup: Option<String>,
+        /// Target Google Drive folder name override.
+        #[arg(long, value_name = "NAME")]
+        folder: Option<String>,
     },
     /// Install the binary, hicolor icons, and Freedesktop `.desktop` launcher entry.
     InstallDesktop {
@@ -851,16 +865,19 @@ async fn create_backup(
     passphrase: String,
     upload_gdrive: Option<bool>,
 ) -> Result<BackupInfo, String> {
+    let cfg = tauri::async_runtime::spawn_blocking(core_load_backup_config)
+        .await
+        .map_err(err_str)?;
     if upload_gdrive.unwrap_or(false) {
         let vault = Arc::clone(&state.vault);
-        let res = core_sync_gdrive(vault.root(), Some(&passphrase), &BackupConfig::default())
+        let res = core_sync_gdrive_with_target(vault.root(), Some(&passphrase), None, &cfg)
             .await
             .map_err(err_str)?;
         res.backup
             .ok_or_else(|| "Backup completed without metadata".to_string())
     } else {
         spawn_vault(&state.vault, move |vault| {
-            core_create_backup(vault.root(), &passphrase, &BackupConfig::default()).map_err(err_str)
+            core_create_backup(vault.root(), &passphrase, &cfg).map_err(err_str)
         })
         .await
     }
@@ -901,16 +918,80 @@ async fn restore_backup(
 async fn sync_gdrive(
     state: State<'_, DesktopState>,
     passphrase: Option<String>,
+    backup_id: Option<String>,
     config: Option<BackupConfig>,
 ) -> Result<SyncResult, String> {
     let vault = Arc::clone(&state.vault);
-    core_sync_gdrive(
+    let cfg = match config {
+        Some(c) => c,
+        None => tauri::async_runtime::spawn_blocking(core_load_backup_config)
+            .await
+            .map_err(err_str)?,
+    };
+    core_sync_gdrive_with_target(
         vault.root(),
         passphrase.as_deref(),
-        &config.unwrap_or_default(),
+        backup_id.as_deref(),
+        &cfg,
     )
     .await
     .map_err(err_str)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn get_backup_config() -> Result<BackupConfig, String> {
+    tauri::async_runtime::spawn_blocking(core_load_backup_config)
+        .await
+        .map_err(err_str)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn save_backup_config(config: BackupConfig) -> Result<BackupConfig, String> {
+    tauri::async_runtime::spawn_blocking(move || core_save_backup_config(&config))
+        .await
+        .map_err(err_str)?
+        .map_err(err_str)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn get_gdrive_status(config: Option<BackupConfig>) -> Result<GdriveAuthStatus, String> {
+    let cfg = match config {
+        Some(c) => c,
+        None => tauri::async_runtime::spawn_blocking(core_load_backup_config)
+            .await
+            .map_err(err_str)?,
+    };
+    Ok(core_get_gdrive_status(&cfg).await)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn connect_gdrive_rclone(remote_name: Option<String>) -> Result<GdriveAuthStatus, String> {
+    core_connect_gdrive_rclone(remote_name.as_deref())
+        .await
+        .map_err(err_str)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn connect_gdrive_oauth(
+    client_id: String,
+    client_secret: Option<String>,
+) -> Result<GdriveAuthStatus, String> {
+    core_connect_gdrive_oauth(&ConnectGdriveOauthRequest {
+        client_id,
+        client_secret,
+    })
+    .await
+    .map_err(err_str)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn save_gdrive_token(access_token: String) -> Result<GdriveAuthStatus, String> {
+    core_save_gdrive_token(&access_token).await.map_err(err_str)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn disconnect_gdrive() -> Result<GdriveAuthStatus, String> {
+    core_disconnect_gdrive().await.map_err(err_str)
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1055,16 +1136,18 @@ fn run_cli_subcommand(cli_vault: Option<PathBuf>, cmd: Commands) -> Result<()> {
             let vault_dir = resolve_vault_path(cli_vault, None);
             let _vault = Vault::open(&vault_dir)?;
             let passphrase = read_passphrase_env(&passphrase_env)?;
+            let cfg = core_load_backup_config();
             if upload_gdrive {
                 let rt = tokio::runtime::Runtime::new()?;
-                let res = rt.block_on(core_sync_gdrive(
+                let res = rt.block_on(core_sync_gdrive_with_target(
                     &vault_dir,
                     Some(&passphrase),
-                    &BackupConfig::default(),
+                    None,
+                    &cfg,
                 ))?;
                 println!("{}", serde_json::to_string_pretty(&res)?);
             } else {
-                let info = core_create_backup(&vault_dir, &passphrase, &BackupConfig::default())?;
+                let info = core_create_backup(&vault_dir, &passphrase, &cfg)?;
                 println!("{}", serde_json::to_string_pretty(&info)?);
             }
         }
@@ -1088,6 +1171,27 @@ fn run_cli_subcommand(cli_vault: Option<PathBuf>, cmd: Commands) -> Result<()> {
                 restored_vault.rebuild_index()?;
             }
             println!("{}", serde_json::to_string_pretty(&resp)?);
+        }
+        Commands::Sync { backup, folder } => {
+            let vault_dir = resolve_vault_path(cli_vault, None);
+            let _vault = Vault::open(&vault_dir)?;
+            let mut cfg = core_load_backup_config();
+            if let Some(folder_name) = folder {
+                if !folder_name.trim().is_empty() {
+                    cfg.gdrive_folder = folder_name.trim().to_string();
+                }
+            }
+            let rt = tokio::runtime::Runtime::new()?;
+            let res = rt.block_on(core_sync_gdrive_with_target(
+                &vault_dir,
+                None,
+                backup.as_deref(),
+                &cfg,
+            ))?;
+            println!("{}", serde_json::to_string_pretty(&res)?);
+            if !res.uploaded_remote {
+                bail!("{}", res.message);
+            }
         }
         Commands::InstallDesktop { bin_dir, data_dir } => {
             let report = desktop::install_desktop(bin_dir, data_dir)?;
@@ -1182,6 +1286,13 @@ fn main() {
                     create_backup,
                     restore_backup,
                     sync_gdrive,
+                    get_backup_config,
+                    save_backup_config,
+                    get_gdrive_status,
+                    connect_gdrive_rclone,
+                    connect_gdrive_oauth,
+                    save_gdrive_token,
+                    disconnect_gdrive,
                     upload_photo,
                     upload_audio,
                     start_voice_recording,

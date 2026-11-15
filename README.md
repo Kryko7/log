@@ -87,11 +87,12 @@ Global flag: `--vault <PATH>` (overrides `LOG_VAULT_DIR`; defaults to `~/Persona
 - `log-journal import-dayone --zip <PATH> [--notebook <ID>] [--dry-run]` — Import a Day One `.zip` or `.json` export.
 - `log-journal import-notion --path <PATH> [--notebook <ID>] [--dry-run]` — Import a Notion folder/ZIP or MCP JSON snapshot, skipping entries already present from Day One.
 - `log-journal backup --passphrase-env <ENV> [--upload-gdrive]` — Create an `age`-encrypted `.tar.gz.age` vault snapshot (and optionally upload to Google Drive).
+- `log-journal sync [--folder <NAME>] [--backup <ID>]` — Upload an encrypted snapshot to Google Drive using saved settings, OAuth, `rclone`, `LOG_GDRIVE_TOKEN`, or `gdrive`.
 - `log-journal restore --file <PATH> --target <DIR> --passphrase-env <ENV> [--overwrite]` — Decrypt and restore an `.age` archive into `--target`.
 
 ## Tauri IPC & `vault://` Media Protocol
 
-- **28 IPC Commands**: `get_vault_stats`, `list_notebooks`, `create_notebook`, `update_notebook`, `delete_notebook`, `list_entries`, `get_entry`, `save_entry`, `delete_entry`, `search_entries`, `list_tags`, `get_calendar_month`, `get_on_this_day`, `get_backlinks`, `list_templates`, `get_daily_context`, `get_asset_manifest`, `import_dayone`, `import_notion`, `list_backups`, `create_backup`, `restore_backup`, `sync_gdrive`, `upload_photo`, `upload_audio`, `start_voice_recording`, `stop_voice_recording`, `cancel_voice_recording`.
+- **35 IPC Commands**: `get_vault_stats`, `list_notebooks`, `create_notebook`, `update_notebook`, `delete_notebook`, `list_entries`, `get_entry`, `save_entry`, `delete_entry`, `search_entries`, `list_tags`, `get_calendar_month`, `get_on_this_day`, `get_backlinks`, `list_templates`, `get_daily_context`, `get_asset_manifest`, `import_dayone`, `import_notion`, `list_backups`, `create_backup`, `restore_backup`, `sync_gdrive`, `get_backup_config`, `save_backup_config`, `get_gdrive_status`, `connect_gdrive_rclone`, `connect_gdrive_oauth`, `save_gdrive_token`, `disconnect_gdrive`, `upload_photo`, `upload_audio`, `start_voice_recording`, `stop_voice_recording`, `cancel_voice_recording`.
 - **`vault://` Custom URI Protocol**: Streams `/vault-media/...` and `/vault-thumbs/...` directly from disk with path-traversal protection and proper `Content-Type` headers.
 
 ## Desktop Integration & Scripts

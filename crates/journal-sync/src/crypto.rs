@@ -409,7 +409,7 @@ fn meta_sidecar_path(archive_path: &Path) -> PathBuf {
     PathBuf::from(format!("{}.meta.json", archive_path.display()))
 }
 
-fn write_sidecars(archive_path: &Path, info: &BackupInfo) -> Result<()> {
+pub(crate) fn write_sidecars(archive_path: &Path, info: &BackupInfo) -> Result<()> {
     let sha_path = sha256_sidecar_path(archive_path);
     fs::write(&sha_path, format!("{}  {}\n", info.sha256, info.filename))?;
 

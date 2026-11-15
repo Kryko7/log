@@ -111,6 +111,25 @@ export async function invokeCmd(cmd, args = {}) {
   }
 }
 
+function normalizeBackupConfig(cfg) {
+  if (!cfg || typeof cfg !== "object") return null;
+  const keepRaw = cfg.keep_last_n ?? cfg.keep_local_snapshots ?? 3;
+  const keepLastN = Number.isFinite(Number(keepRaw))
+    ? Math.max(0, Math.floor(Number(keepRaw)))
+    : 3;
+  const destDir = String(cfg.destination_dir ?? "").trim();
+  const folder = String(cfg.gdrive_folder ?? "").trim();
+  const remote = String(cfg.rclone_remote ?? "").trim();
+  return {
+    destination_dir: destDir || null,
+    gdrive_folder: folder || "LogJournal",
+    rclone_remote: remote || null,
+    auto_sync_enabled: Boolean(cfg.auto_sync_enabled),
+    keep_last_n: keepLastN,
+    has_passphrase_hint: cfg.has_passphrase_hint ?? null,
+  };
+}
+
 export const api = {
   getVaultStats: () => invokeCmd("get_vault_stats", {}),
 
@@ -276,31 +295,52 @@ export const api = {
       overwrite_existing: Boolean(req.overwrite_existing),
     }),
 
-  syncGdrive: (passOrObj, config) => {
+  syncGdrive: (passOrObj, config, backupId = null) => {
     const wrapped =
       typeof passOrObj === "object" &&
       passOrObj !== null &&
-      ("config" in passOrObj || "passphrase" in passOrObj);
+      ("config" in passOrObj ||
+        "passphrase" in passOrObj ||
+        "backup_id" in passOrObj);
     const rawPass = wrapped ? passOrObj.passphrase : passOrObj;
     const rawCfg = wrapped ? passOrObj.config : config;
-    const keepRaw = rawCfg?.keep_last_n ?? rawCfg?.keep_local_snapshots ?? 14;
-    const keepLastN = Number.isFinite(Number(keepRaw))
-      ? Math.max(0, Math.floor(Number(keepRaw)))
-      : 14;
-    const normalizedConfig = rawCfg
-      ? {
-          destination_dir: rawCfg.destination_dir ?? null,
-          gdrive_folder: rawCfg.gdrive_folder || "LogJournal",
-          auto_sync_enabled: Boolean(rawCfg.auto_sync_enabled),
-          keep_last_n: keepLastN,
-          has_passphrase_hint: rawCfg.has_passphrase_hint ?? null,
-        }
-      : null;
+    const rawBackupId = wrapped ? passOrObj.backup_id : backupId;
     return invokeCmd("sync_gdrive", {
       passphrase: rawPass ?? null,
-      config: normalizedConfig,
+      backup_id: rawBackupId ?? null,
+      config: normalizeBackupConfig(rawCfg),
     });
   },
+
+  getBackupConfig: () => invokeCmd("get_backup_config", {}),
+
+  saveBackupConfig: (config = {}) =>
+    invokeCmd("save_backup_config", {
+      config: normalizeBackupConfig(config) ?? normalizeBackupConfig({}),
+    }),
+
+  getGdriveStatus: (config = null) =>
+    invokeCmd("get_gdrive_status", {
+      config: normalizeBackupConfig(config),
+    }),
+
+  connectGdriveRclone: (remoteName = null) =>
+    invokeCmd("connect_gdrive_rclone", {
+      remote_name: remoteName ?? null,
+    }),
+
+  connectGdriveOauth: (req = {}) =>
+    invokeCmd("connect_gdrive_oauth", {
+      client_id: req.client_id ?? "",
+      client_secret: req.client_secret ?? null,
+    }),
+
+  saveGdriveToken: (accessToken) =>
+    invokeCmd("save_gdrive_token", {
+      access_token: accessToken ?? "",
+    }),
+
+  disconnectGdrive: () => invokeCmd("disconnect_gdrive", {}),
 
   uploadPhoto: async (fileOrBytes, caption = null, explicitName = null) => {
     const data_base64 = await inputToBase64(fileOrBytes);

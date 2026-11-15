@@ -4,11 +4,45 @@ use std::path::PathBuf;
 use chrono::NaiveDate;
 use journal_core::Vault;
 use journal_sync::{
-    create_backup, get_daily_context, list_backups, parse_calendar_json, restore_backup,
-    sync_gdrive,
+    connect_gdrive_oauth, create_backup, disconnect_gdrive, get_daily_context, get_gdrive_status,
+    list_backups, load_backup_config, parse_calendar_json, restore_backup, save_backup_config,
+    save_gdrive_token, sync_gdrive, sync_gdrive_with_target,
 };
-use journal_types::{BackupConfig, RestoreBackupRequest, SaveEntryRequest};
+use journal_types::{
+    BackupConfig, ConnectGdriveOauthRequest, RestoreBackupRequest, SaveEntryRequest,
+};
 use uuid::Uuid;
+
+static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+struct EnvVarGuard {
+    saved: Vec<(&'static str, Option<String>)>,
+}
+
+impl EnvVarGuard {
+    fn set(pairs: &[(&'static str, Option<&str>)]) -> Self {
+        let mut saved = Vec::with_capacity(pairs.len());
+        for (key, val) in pairs {
+            saved.push((*key, std::env::var(key).ok()));
+            match val {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+        Self { saved }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        for (key, prev) in self.saved.drain(..).rev() {
+            match prev {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
+}
 
 const TEST_PNG: &[u8] = &[
     137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 2, 8, 2, 0,
@@ -156,9 +190,16 @@ async fn gdrive_sync_offline_gracefully_reports_local_backup() {
         })
         .unwrap();
 
-    // Ensure no token/CLI env var interferes in this test.
-    std::env::remove_var("LOG_GDRIVE_TOKEN");
-    std::env::remove_var("LOG_GDRIVE_USE_CLI");
+    let _lock = ENV_LOCK.lock().await;
+    let config_dir = tmp.path.join("config");
+    let config_str = config_dir.to_string_lossy().into_owned();
+    let _env = EnvVarGuard::set(&[
+        ("LOG_CONFIG_DIR", Some(&config_str)),
+        ("LOG_GDRIVE_DISABLE_CLI", Some("1")),
+        ("LOG_GDRIVE_TOKEN", None),
+        ("LOG_GDRIVE_USE_CLI", None),
+        ("PATH", Some("")),
+    ]);
 
     let res = sync_gdrive(
         &vault_dir,
@@ -170,6 +211,7 @@ async fn gdrive_sync_offline_gracefully_reports_local_backup() {
 
     assert!(res.success);
     assert!(!res.uploaded_remote);
+    assert!(!res.message.contains("scripts/sync-gdrive.sh"));
     assert!(res.backup.is_some());
     assert!(res.backup.unwrap().filename.ends_with(".tar.gz.age"));
 }
@@ -221,15 +263,16 @@ async fn daily_context_loads_calendar_cache_and_on_this_day_count() {
         .contains("Peradeniya Botanical Walk"));
     assert!(parsed_direct[0].suggested_prompt.contains("this afternoon"));
 
-    std::env::set_var("LOG_OFFLINE", "1");
-    std::env::set_var("LOG_CALENDAR_CACHE_PATH", &cache_path);
+    let _lock = ENV_LOCK.lock().await;
+    let cache_str = cache_path.to_string_lossy().into_owned();
+    let _env = EnvVarGuard::set(&[
+        ("LOG_OFFLINE", Some("1")),
+        ("LOG_CALENDAR_CACHE_PATH", Some(&cache_str)),
+    ]);
 
     let ctx = get_daily_context(&vault, date, None, None)
         .await
         .expect("get daily context");
-
-    std::env::remove_var("LOG_OFFLINE");
-    std::env::remove_var("LOG_CALENDAR_CACHE_PATH");
 
     assert_eq!(ctx.date, date);
     assert_eq!(ctx.on_this_day_count, 1);
@@ -279,4 +322,162 @@ fn restore_backup_rejects_unexpected_archive_prefix() {
         "unexpected error: {err}"
     );
     assert!(!restore_dir.join(".index/evil.txt").exists());
+}
+
+#[tokio::test]
+async fn backup_config_persists_with_0600_and_defaults_keep_last_3() {
+    let _lock = ENV_LOCK.lock().await;
+    let tmp = TempDir::new("backup-config");
+    let config_dir = tmp.path.join("cfg");
+    let config_str = config_dir.to_string_lossy().into_owned();
+    let _env = EnvVarGuard::set(&[
+        ("LOG_CONFIG_DIR", Some(&config_str)),
+        ("LOG_GDRIVE_DISABLE_CLI", Some("1")),
+        ("LOG_GDRIVE_TOKEN", None),
+        ("PATH", Some("")),
+    ]);
+
+    let default_cfg = load_backup_config();
+    assert_eq!(default_cfg.keep_last_n, 3);
+    assert_eq!(default_cfg.gdrive_folder, "LogJournal");
+
+    let updated = BackupConfig {
+        destination_dir: Some("~/DriveMirror".into()),
+        gdrive_folder: "MyLogBackups".into(),
+        auto_sync_enabled: true,
+        keep_last_n: 5,
+        has_passphrase_hint: Some("tea".into()),
+        rclone_remote: Some("logjournal:".into()),
+    };
+    let saved = save_backup_config(&updated).expect("save backup config");
+    assert_eq!(saved.rclone_remote.as_deref(), Some("logjournal"));
+    assert_eq!(saved.keep_last_n, 5);
+
+    let reloaded = load_backup_config();
+    assert_eq!(reloaded, saved);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(config_dir.join("backup-config.json"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    let status = get_gdrive_status(&reloaded).await;
+    assert!(!status.connected);
+    assert_eq!(status.method, "none");
+    assert!(!status.has_rclone);
+    assert!(!status.has_gdrive_cli);
+}
+
+#[tokio::test]
+async fn sync_gdrive_with_target_reuses_existing_archive_and_mirrors_destination() {
+    let _lock = ENV_LOCK.lock().await;
+    let tmp = TempDir::new("sync-target");
+    let vault_dir = tmp.path.join("vault");
+    let config_dir = tmp.path.join("cfg");
+    let mirror_dir = tmp.path.join("mirror");
+    let config_str = config_dir.to_string_lossy().into_owned();
+    let _env = EnvVarGuard::set(&[
+        ("LOG_CONFIG_DIR", Some(&config_str)),
+        ("LOG_GDRIVE_DISABLE_CLI", Some("1")),
+        ("LOG_GDRIVE_TOKEN", None),
+        ("PATH", Some("")),
+    ]);
+
+    let vault = Vault::open(&vault_dir).expect("open vault");
+    vault
+        .save_entry(SaveEntryRequest {
+            id: None,
+            title: "Existing Backup Target".into(),
+            date: None,
+            notebook_id: None,
+            tags: vec![],
+            mood: None,
+            starred: false,
+            weather: None,
+            location: None,
+            stamps: vec![],
+            photos: vec![],
+            audio: vec![],
+            body: "Verify no duplicate archive is created.".into(),
+        })
+        .unwrap();
+
+    let created = create_backup(&vault_dir, "target-passphrase", &BackupConfig::default())
+        .expect("create initial backup");
+
+    let cfg = BackupConfig {
+        destination_dir: Some(mirror_dir.to_string_lossy().into_owned()),
+        ..BackupConfig::default()
+    };
+    let res = sync_gdrive_with_target(&vault_dir, None, Some(&created.id), &cfg)
+        .await
+        .expect("sync existing backup by id");
+
+    assert!(res.success);
+    assert!(!res.uploaded_remote);
+    assert_eq!(res.backup.as_ref().map(|b| &b.id), Some(&created.id));
+    assert_eq!(list_backups(&vault_dir).unwrap().len(), 1);
+    assert!(mirror_dir.join(&created.filename).is_file());
+    assert!(res.message.contains("Backup Settings"));
+    assert!(!res.message.contains("scripts/sync-gdrive.sh"));
+}
+
+#[tokio::test]
+async fn disconnect_gdrive_clears_tokens_and_preserves_client_id() {
+    let _lock = ENV_LOCK.lock().await;
+    let tmp = TempDir::new("disconnect-gdrive");
+    let config_dir = tmp.path.join("cfg");
+    fs::create_dir_all(&config_dir).unwrap();
+    let config_str = config_dir.to_string_lossy().into_owned();
+    let _env = EnvVarGuard::set(&[
+        ("LOG_CONFIG_DIR", Some(&config_str)),
+        ("LOG_GDRIVE_DISABLE_CLI", Some("1")),
+        ("LOG_GDRIVE_TOKEN", None),
+        ("PATH", Some("")),
+    ]);
+
+    fs::write(
+        config_dir.join("gdrive-auth.json"),
+        serde_json::json!({
+            "client_id": "123456.apps.googleusercontent.com",
+            "access_token": "ya29.fake",
+            "refresh_token": "1//refresh-fake",
+            "account_email": "writer@example.com"
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let before = get_gdrive_status(&BackupConfig::default()).await;
+    assert!(before.connected);
+    assert_eq!(before.method, "oauth");
+    assert_eq!(before.account_hint.as_deref(), Some("writer@example.com"));
+    assert_eq!(
+        before.saved_client_id.as_deref(),
+        Some("123456.apps.googleusercontent.com")
+    );
+
+    let after = disconnect_gdrive().await.expect("disconnect gdrive");
+    assert!(!after.connected);
+    assert_eq!(after.method, "none");
+    assert_eq!(
+        after.saved_client_id.as_deref(),
+        Some("123456.apps.googleusercontent.com")
+    );
+
+    let empty_oauth = connect_gdrive_oauth(&ConnectGdriveOauthRequest {
+        client_id: "   ".into(),
+        client_secret: None,
+    })
+    .await;
+    assert!(empty_oauth.is_err());
+
+    let empty_tok = save_gdrive_token("   ").await;
+    assert!(empty_tok.is_err());
 }
