@@ -165,7 +165,7 @@ fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
     }
 
     let mut out = Vec::with_capacity((cleaned.len() / 4) * 3);
-    for chunk in cleaned.chunks_exact(4) {
+    for chunk in cleaned.as_chunks::<4>().0 {
         let mut vals = [0u8; 4];
         let mut pad = 0usize;
         for (idx, &ch) in chunk.iter().enumerate() {

@@ -90,10 +90,7 @@ impl DeduplicationIndex {
             return true;
         }
         let norm_lead = normalized_lead_paragraph(body);
-        if !norm_lead.is_empty() && self.date_titles_and_leads.contains(&(date, norm_lead)) {
-            return true;
-        }
-        false
+        !norm_lead.is_empty() && self.date_titles_and_leads.contains(&(date, norm_lead))
     }
 }
 

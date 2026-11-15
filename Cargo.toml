@@ -12,13 +12,10 @@ exclude = ["src-tauri"]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-authors = ["Log Authors"]
 
 [workspace.dependencies]
 journal-types = { path = "crates/journal-types" }
 journal-core = { path = "crates/journal-core" }
-journal-import = { path = "crates/journal-import" }
-journal-sync = { path = "crates/journal-sync" }
 
 # Serialization & Core
 serde = { version = "1.0", features = ["derive"] }
@@ -32,10 +29,9 @@ dirs = "6.0"
 walkdir = "2.5"
 regex = "1.11"
 
-# Async, HTTP Client & CLI
+# Async & HTTP Client
 tokio = { version = "1.43", features = ["full"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
-clap = { version = "4.5", features = ["derive"] }
 
 # Storage, Markdown & Media
 rusqlite = { version = "0.40", features = ["bundled"] }
