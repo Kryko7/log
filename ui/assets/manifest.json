@@ -1,0 +1,114 @@
+{
+  "covers": [
+    {
+      "id": "botanical-fern-wash",
+      "label": "Botanical Fern Wash",
+      "category": "covers",
+      "path": "/assets/covers/botanical-fern-wash.png",
+      "description": "Deckle-edge warm cream handmade paper with delicate ink-and-watercolor woodland fern fronds.",
+      "tags": ["watercolor", "botanical", "fern", "cream", "daylight"]
+    },
+    {
+      "id": "rainy-tea-desk",
+      "label": "Rainy Tea & Open Folio",
+      "category": "covers",
+      "path": "/assets/covers/rainy-tea-desk.png",
+      "description": "Terracotta teacup, brass fountain pen, and open cream journal beside a rain-streaked garden window.",
+      "tags": ["watercolor", "cozy", "rain", "tea", "fountain-pen"]
+    },
+    {
+      "id": "pressed-wildflowers",
+      "label": "Pressed Wildflowers",
+      "category": "covers",
+      "path": "/assets/covers/pressed-wildflowers.png",
+      "description": "Herbarium flat-lay of pressed meadow wildflowers secured with translucent cream washi tape over watercolor washes.",
+      "tags": ["herbarium", "wildflowers", "washi", "scrapbook", "sage"]
+    },
+    {
+      "id": "midnight-ink-garden",
+      "label": "Midnight Ink Garden",
+      "category": "covers",
+      "path": "/assets/covers/midnight-ink-garden.png",
+      "description": "Candlelit nocturnal garden with fireflies, crescent moon, and gilded botanical ink linework.",
+      "tags": ["night", "candlelit", "fireflies", "botanical", "dark-mode"]
+    }
+  ],
+  "stamps": [
+    {
+      "id": "vintage-airmail-flora",
+      "label": "Vintage Airmail Flora",
+      "category": "stamps",
+      "path": "/assets/stamps/vintage-airmail-flora.png",
+      "description": "Transparent alpha-keyed perforated vintage postage stamp featuring terracotta blooms and sage botanical sprigs.",
+      "tags": ["postage", "floral", "terracotta", "sage", "vintage", "transparent"]
+    },
+    {
+      "id": "postmark-circle",
+      "label": "Sanctuary Post Cancellation",
+      "category": "stamps",
+      "path": "/assets/svg/postmark-circle.svg",
+      "description": "Double-ring circular terracotta postal cancellation mark with radial ticks, curved arc typography, and five wavy cancellation lines.",
+      "tags": ["svg", "postmark", "terracotta", "ink", "transparent"]
+    },
+    {
+      "id": "postmark-botanical",
+      "label": "Herbarium Specimen Stamp",
+      "category": "stamps",
+      "path": "/assets/svg/postmark-botanical.svg",
+      "description": "Oval botanical sage herbarium specimen ink stamp with fine fern linework and catalog border.",
+      "tags": ["svg", "herbarium", "fern", "sage", "specimen", "transparent"]
+    }
+  ],
+  "stickers": [
+    {
+      "id": "pressed-ginkgo",
+      "label": "Pressed Ginkgo Leaf",
+      "category": "stickers",
+      "path": "/assets/stamps/pressed-ginkgo.png",
+      "description": "Transparent alpha-keyed die-cut sticker of a warm ochre watercolor and botanical ink pressed ginkgo leaf.",
+      "tags": ["ginkgo", "botanical", "watercolor", "die-cut", "transparent"]
+    },
+    {
+      "id": "botanical-fountain-pen",
+      "label": "Botanical Fountain Pen",
+      "category": "stickers",
+      "path": "/assets/stamps/botanical-fountain-pen.png",
+      "description": "Transparent alpha-keyed die-cut sticker of a tortoiseshell and brass fountain pen entwined with sage sprigs.",
+      "tags": ["fountain-pen", "botanical", "ink", "die-cut", "transparent"]
+    },
+    {
+      "id": "app-icon",
+      "label": "Log Journal Emblem",
+      "category": "stickers",
+      "path": "/assets/svg/app-icon.svg",
+      "description": "Open stitched linen notebook emblem with brass fountain-pen nib and pressed ginkgo leaf on cream parchment.",
+      "tags": ["svg", "emblem", "icon", "notebook", "nib", "ginkgo"]
+    }
+  ],
+  "washi": [
+    {
+      "id": "watercolor-washi-sage",
+      "label": "Botanical Sage Washi Strip",
+      "category": "washi",
+      "path": "/assets/stamps/watercolor-washi-sage.png",
+      "description": "Transparent alpha-keyed torn-edge watercolor botanical sage washi tape strip with cream leaf silhouettes.",
+      "tags": ["washi", "sage", "botanical", "watercolor", "transparent"]
+    },
+    {
+      "id": "washi-cream",
+      "label": "Torn Cream Kozo Washi",
+      "category": "washi",
+      "path": "/assets/svg/washi-cream.svg",
+      "description": "Semi-translucent Japanese kozo fiber cream washi tape with organic deckle-torn edges and subtle crosshatch weave.",
+      "tags": ["svg", "washi", "cream", "kozo", "transparent", "polaroid"]
+    },
+    {
+      "id": "washi-terracotta",
+      "label": "Torn Terracotta & Sage Washi",
+      "category": "washi",
+      "path": "/assets/svg/washi-terracotta.svg",
+      "description": "Semi-translucent terracotta and sage watercolor wash tape strip with organic deckle-torn paper edges.",
+      "tags": ["svg", "washi", "terracotta", "sage", "transparent", "polaroid"]
+    }
+  ]
+}

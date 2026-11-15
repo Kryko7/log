@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Non-destructive desktop launcher installer for Log Personal Journal (Arch Linux / Wayland).
+# Non-destructive desktop launcher installer for the pure Tauri v2 Log Personal Journal.
 APP_DIR="/home/minindu/Personal/Log"
 DEST_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 DEST_FILE="$DEST_DIR/log-journal.desktop"
@@ -14,9 +14,9 @@ Version=1.0
 Type=Application
 Name=Log — Personal Journal
 GenericName=Personal Journal
-Comment=Tactile, local-first Markdown journal with WebGPU paper craft and encrypted backup
-Exec=$APP_DIR/log-journal launch
-Icon=$APP_DIR/assets/svg/app-icon.svg
+Comment=Tactile, local-first Markdown journal with Tauri v2 and encrypted backup
+Exec=$APP_DIR/scripts/launch-wayland.sh
+Icon=$APP_DIR/ui/assets/svg/app-icon.svg
 Terminal=false
 Categories=Office;TextEditor;Utility;
 Keywords=journal;diary;markdown;notes;scrapbook;

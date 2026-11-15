@@ -37,7 +37,7 @@ if [[ -z "$BIN" ]]; then
     elif command -v log-journal >/dev/null 2>&1; then
         BIN="$(command -v log-journal)"
     else
-        echo "Error: log-journal binary not found. Build with: cargo build --release -p journal-server" >&2
+        echo "Error: log-journal binary not found. Build with: CARGO_TARGET_DIR=/tmp/log-cargo-target cargo build --manifest-path src-tauri/Cargo.toml --release" >&2
         exit 1
     fi
 fi
