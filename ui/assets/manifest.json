@@ -63,6 +63,54 @@
       "path": "/assets/covers/winter-pine-lantern.png",
       "description": "Nocturnal winter cedar boughs, pinecones, soft snowfall, and a warm amber brass lantern on charcoal parchment.",
       "tags": ["winter", "night", "lantern", "pine", "dark-mode"]
+    },
+    {
+      "id": "anim-rainy-window",
+      "label": "Rain on Garden Glass",
+      "category": "covers",
+      "path": "/assets/covers/anim-rainy-window.svg",
+      "description": "Gently falling watercolor rain and glistening window droplets over a misty sage garden.",
+      "tags": ["animated", "rain", "cozy", "sage", "window"]
+    },
+    {
+      "id": "anim-firefly-meadow",
+      "label": "Candlelit Firefly Garden",
+      "category": "covers",
+      "path": "/assets/covers/anim-firefly-meadow.svg",
+      "description": "Drifting warm amber fireflies, crescent moon, and swaying ferns on a dark nocturnal canvas.",
+      "tags": ["animated", "night", "fireflies", "botanical", "dark-mode"]
+    },
+    {
+      "id": "anim-autumn-drift",
+      "label": "Drifting Autumn Leaves",
+      "category": "covers",
+      "path": "/assets/covers/anim-autumn-drift.svg",
+      "description": "Terracotta maple and golden ginkgo leaves gliding slowly across warm cream handmade paper.",
+      "tags": ["animated", "autumn", "leaves", "cream", "botanical"]
+    },
+    {
+      "id": "anim-ink-bloom",
+      "label": "Botanical Ink & Tea Wash",
+      "category": "covers",
+      "path": "/assets/covers/anim-ink-bloom.svg",
+      "description": "Living sage, ochre, and terracotta watercolor clouds breathing behind fine walnut-ink flora.",
+      "tags": ["animated", "watercolor", "ink", "minimal", "calm"]
+    },
+    {
+      "id": "anim-coastal-tide",
+      "label": "Evening Coastal Tide",
+      "category": "covers",
+      "path": "/assets/covers/anim-coastal-tide.svg",
+      "description": "Soft rhythmic ocean tide ripples, swaying sea oats, and a softly pulsing headland lighthouse.",
+      "tags": ["animated", "coast", "lighthouse", "travel", "calm"]
+    },
+    {
+      "id": "anim-morning-steam",
+      "label": "Morning Tea & Sunbeams",
+      "category": "covers",
+      "path": "/assets/covers/anim-morning-steam.svg",
+      "description": "Warm slanting morning light with drifting dust motes and curling steam from a terracotta teacup.",
+      "tags": ["animated", "morning", "tea", "sunbeams", "cozy"]
     }
   ],
   "stamps": [

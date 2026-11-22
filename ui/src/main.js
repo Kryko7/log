@@ -30,6 +30,9 @@ function emptySearchFilters() {
 const state = {
   nightMode: localStorage.getItem("log_theme") === "night",
   sidebarCollapsed: localStorage.getItem("log_sidebar_collapsed") === "true",
+  paperRuling: localStorage.getItem("log_paper_ruling") || "plain", // "plain" | "ruled" | "dots" | "margin"
+  proseScale: localStorage.getItem("log_prose_scale") || "editorial", // "compact" | "editorial" | "large"
+  focusZen: false,
   activeView: "editor", // "editor" | "timeline" | "calendar" | "on_this_day"
   editorMode: "write", // "write" | "read"
   pageTurnDir: null,
@@ -130,6 +133,40 @@ function applyTheme(isNight) {
   );
   document.body.classList.toggle("night", state.nightMode);
   paperShader?.setNightMode(state.nightMode);
+}
+
+function applyPaperRuling(ruling) {
+  const valid = ["plain", "ruled", "dots", "margin"].includes(ruling)
+    ? ruling
+    : "plain";
+  state.paperRuling = valid;
+  localStorage.setItem("log_paper_ruling", valid);
+  document.documentElement.setAttribute("data-paper-ruling", valid);
+}
+
+function applyProseScale(scale) {
+  const valid = ["compact", "editorial", "large"].includes(scale)
+    ? scale
+    : "editorial";
+  state.proseScale = valid;
+  localStorage.setItem("log_prose_scale", valid);
+  document.documentElement.setAttribute("data-prose-scale", valid);
+}
+
+let preZenSidebarCollapsed = false;
+
+function applyFocusZen(enabled) {
+  const next = Boolean(enabled);
+  if (next === state.focusZen) return;
+  state.focusZen = next;
+  if (next) {
+    preZenSidebarCollapsed = state.sidebarCollapsed;
+    applySidebarCollapsed(true);
+  } else {
+    applySidebarCollapsed(preZenSidebarCollapsed);
+  }
+  document.body.classList.toggle("focus-zen", next);
+  activeEditorHandle?.syncFocusState?.();
 }
 
 function applySidebarCollapsed(collapsed) {
@@ -602,6 +639,9 @@ function renderMainView() {
       onModeChange: (m) => {
         state.editorMode = m;
       },
+      onSetPaperRuling: (ruling) => applyPaperRuling(ruling),
+      onSetProseScale: (scale) => applyProseScale(scale),
+      onToggleFocusZen: () => applyFocusZen(!state.focusZen),
       onSearchText: (query) => {
         state.searchQuery = query;
         state.searchFilters = emptySearchFilters();
@@ -1249,7 +1289,14 @@ function mountShell() {
   iconWrap.innerHTML = icon("sidebar", "tiny-icon");
   reopenBtnEl.appendChild(iconWrap.firstElementChild || iconWrap);
   reopenBtnEl.appendChild(document.createTextNode("Sidebar"));
-  reopenBtnEl.addEventListener("click", () => applySidebarCollapsed(false));
+  reopenBtnEl.addEventListener("click", () => {
+    if (state.focusZen) {
+      state.focusZen = false;
+      document.body.classList.remove("focus-zen");
+      activeEditorHandle?.syncFocusState?.();
+    }
+    applySidebarCollapsed(false);
+  });
 
   viewRoot = document.createElement("div");
   viewRoot.id = "view-root";
@@ -1300,6 +1347,13 @@ function wireGlobalShortcuts() {
     if (mod && key === "n" && !ev.shiftKey && !state.activeModal) {
       ev.preventDefault();
       startNewEntry();
+      return;
+    }
+    if (mod && key === "f" && ev.shiftKey && !ev.altKey) {
+      if (!state.activeModal) {
+        ev.preventDefault();
+        applyFocusZen(!state.focusZen);
+      }
       return;
     }
     if (mod && key === "f" && !ev.shiftKey && !ev.altKey) {
@@ -1386,6 +1440,8 @@ function wireGlobalShortcuts() {
 
 async function bootstrap() {
   applyTheme(state.nightMode);
+  applyPaperRuling(state.paperRuling);
+  applyProseScale(state.proseScale);
   mountShell();
   applySidebarCollapsed(state.sidebarCollapsed);
   wireGlobalShortcuts();

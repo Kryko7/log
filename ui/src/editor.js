@@ -392,11 +392,58 @@ export function renderEntryEditor(container, state, callbacks = {}) {
   }
   container.appendChild(sheet);
 
+  // Whisper-thin Reading Progress Ink Hairline
+  const progressHairline = document.createElement("div");
+  progressHairline.className = "entry-progress-hairline";
+  progressHairline.setAttribute("aria-hidden", "true");
+  const progressFill = document.createElement("div");
+  progressFill.className = "entry-progress-fill";
+  progressHairline.appendChild(progressFill);
+  sheet.appendChild(progressHairline);
+
+  let progressRaf = 0;
+  const updateReadingProgress = () => {
+    progressRaf = 0;
+    const scroller = container.closest?.(".sanctuary-main");
+    if (!scroller) {
+      progressHairline.classList.remove("is-visible");
+      return;
+    }
+    const maxScroll = scroller.scrollHeight - scroller.clientHeight;
+    if (maxScroll < 140) {
+      progressHairline.classList.remove("is-visible");
+      progressFill.style.transform = "scaleX(0)";
+      return;
+    }
+    const ratio = Math.min(Math.max(scroller.scrollTop / maxScroll, 0), 1);
+    progressHairline.classList.toggle("is-visible", ratio > 0.015);
+    progressFill.style.transform = `scaleX(${ratio.toFixed(4)})`;
+  };
+  const scheduleReadingProgress = () => {
+    if (progressRaf || disposed) return;
+    progressRaf = requestAnimationFrame(updateReadingProgress);
+  };
+  const scrollHost = container.closest?.(".sanctuary-main");
+  if (scrollHost) {
+    scrollHost.addEventListener("scroll", scheduleReadingProgress, {
+      passive: true,
+      signal: lifecycleAbort.signal,
+    });
+  }
+  window.addEventListener("resize", scheduleReadingProgress, {
+    passive: true,
+    signal: lifecycleAbort.signal,
+  });
+
   // Stamp overlay (sits over sheet)
   const stampLayer = document.createElement("div");
   sheet.appendChild(stampLayer);
 
+  let justPlacedStampId = null;
+
   const syncStampOverlay = () => {
+    const animateId = justPlacedStampId;
+    justPlacedStampId = null;
     renderStampOverlay(
       stampLayer,
       draft.stamps,
@@ -409,7 +456,8 @@ export function renderEntryEditor(container, state, callbacks = {}) {
           renderInlineTool();
         }
         markDirtyAndScheduleSave();
-      }
+      },
+      animateId
     );
   };
 
@@ -442,12 +490,22 @@ export function renderEntryEditor(container, state, callbacks = {}) {
   const renderCoverBanner = () => {
     coverContainer.innerHTML = "";
     if (!draft.cover_asset) return;
+    const matchedCover = (state.manifest?.covers || []).find(
+      (c) => c.path === draft.cover_asset
+    );
+    const isAnimated = Boolean(
+      (Array.isArray(matchedCover?.tags) &&
+        matchedCover.tags.includes("animated")) ||
+        String(draft.cover_asset).includes("/anim-")
+    );
     const banner = document.createElement("div");
-    banner.className = "entry-cover-banner";
+    banner.className = `entry-cover-banner${
+      isAnimated ? " is-animated-cover" : ""
+    }`;
     const img = document.createElement("img");
     img.className = "entry-cover-img";
     img.src = resolveVaultUrl(draft.cover_asset);
-    img.alt = "Entry watercolor cover";
+    img.alt = matchedCover?.label || "Entry cover";
 
     const removeBtn = document.createElement("button");
     removeBtn.type = "button";
@@ -1163,14 +1221,29 @@ export function renderEntryEditor(container, state, callbacks = {}) {
 
     const coverBtn = document.createElement("button");
     coverBtn.type = "button";
-    coverBtn.className = `topbar-icon-btn${draft.cover_asset ? " is-active" : ""}`;
-    coverBtn.title = "Watercolor cover wash";
-    coverBtn.setAttribute("aria-label", "Watercolor cover wash");
+    coverBtn.className = `topbar-icon-btn${
+      draft.cover_asset || coverPopoverOpen ? " is-active" : ""
+    }`;
+    coverBtn.title = "Page appearance, paper ruling & covers";
+    coverBtn.setAttribute("aria-label", "Page appearance and covers");
     coverBtn.appendChild(iconNode("spark", "tiny-icon"));
     coverBtn.addEventListener("click", () => {
       moreMenuOpen = false;
       coverPopoverOpen = !coverPopoverOpen;
       renderTopbar();
+    });
+
+    const focusBtn = document.createElement("button");
+    focusBtn.type = "button";
+    focusBtn.className = `topbar-icon-btn${state.focusZen ? " is-active" : ""}`;
+    focusBtn.title = state.focusZen
+      ? "Exit Zen Focus mode (Ctrl+Shift+F)"
+      : "Zen Focus mode (Ctrl+Shift+F)";
+    focusBtn.setAttribute("aria-label", focusBtn.title);
+    focusBtn.dataset.role = "zen-focus-btn";
+    focusBtn.appendChild(iconNode("focus", "tiny-icon"));
+    focusBtn.addEventListener("click", () => {
+      callbacks.onToggleFocusZen?.();
     });
 
     const moreBtn = document.createElement("button");
@@ -1185,7 +1258,7 @@ export function renderEntryEditor(container, state, callbacks = {}) {
       renderTopbar();
     });
 
-    right.append(saveIndicatorEl, modeSwitch, starBtn, coverBtn, moreBtn);
+    right.append(saveIndicatorEl, modeSwitch, starBtn, coverBtn, focusBtn, moreBtn);
 
     if (draft.id) {
       const divider = document.createElement("span");
@@ -1262,28 +1335,120 @@ export function renderEntryEditor(container, state, callbacks = {}) {
 
     if (coverPopoverOpen) {
       const pop = document.createElement("div");
-      pop.className = "cover-swatch-popover";
-      const covers = state.manifest?.covers || [];
-      for (const cov of covers) {
-        const cBtn = document.createElement("button");
-        cBtn.type = "button";
-        cBtn.className = `cover-mini-btn${
-          draft.cover_asset === cov.path ? " is-selected" : ""
+      pop.className = "cover-swatch-popover page-appearance-popover";
+
+      // 1) Paper Ruling selector
+      const rulingGroup = document.createElement("div");
+      rulingGroup.className = "appearance-group";
+      const rulingLabel = document.createElement("span");
+      rulingLabel.className = "small-caps-meta";
+      rulingLabel.textContent = "Paper Ruling";
+      const rulingRow = document.createElement("div");
+      rulingRow.className = "appearance-seg-row";
+      const rulings = [
+        { id: "plain", label: "Plain" },
+        { id: "ruled", label: "Ruled" },
+        { id: "dots", label: "Dot Grid" },
+        { id: "margin", label: "Margin" },
+      ];
+      for (const r of rulings) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = `appearance-seg-btn${
+          (state.paperRuling || "plain") === r.id ? " is-active" : ""
         }`;
-        cBtn.title = cov.label || "Watercolor wash";
-        const img = document.createElement("img");
-        img.src = resolveVaultUrl(cov.path);
-        img.alt = cov.label || "Cover wash";
-        cBtn.appendChild(img);
-        cBtn.addEventListener("click", () => {
-          draft.cover_asset = cov.path;
-          coverPopoverOpen = false;
-          renderCoverBanner();
+        b.dataset.paperRuling = r.id;
+        b.textContent = r.label;
+        b.addEventListener("click", () => {
+          state.paperRuling = r.id;
+          callbacks.onSetPaperRuling?.(r.id);
           renderTopbar();
-          markDirtyAndScheduleSave();
         });
-        pop.appendChild(cBtn);
+        rulingRow.appendChild(b);
       }
+      rulingGroup.append(rulingLabel, rulingRow);
+      pop.appendChild(rulingGroup);
+
+      // 2) Prose Scale selector
+      const scaleGroup = document.createElement("div");
+      scaleGroup.className = "appearance-group";
+      const scaleLabel = document.createElement("span");
+      scaleLabel.className = "small-caps-meta";
+      scaleLabel.textContent = "Typography Scale";
+      const scaleRow = document.createElement("div");
+      scaleRow.className = "appearance-seg-row";
+      const scales = [
+        { id: "compact", label: "Compact" },
+        { id: "editorial", label: "Editorial" },
+        { id: "large", label: "Large" },
+      ];
+      for (const sc of scales) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = `appearance-seg-btn${
+          (state.proseScale || "editorial") === sc.id ? " is-active" : ""
+        }`;
+        b.dataset.proseScale = sc.id;
+        b.textContent = sc.label;
+        b.addEventListener("click", () => {
+          state.proseScale = sc.id;
+          callbacks.onSetProseScale?.(sc.id);
+          renderTopbar();
+        });
+        scaleRow.appendChild(b);
+      }
+      scaleGroup.append(scaleLabel, scaleRow);
+      pop.appendChild(scaleGroup);
+
+      const covers = state.manifest?.covers || [];
+      const animatedCovers = covers.filter(
+        (c) => Array.isArray(c.tags) && c.tags.includes("animated")
+      );
+      const staticCovers = covers.filter(
+        (c) => !(Array.isArray(c.tags) && c.tags.includes("animated"))
+      );
+
+      const buildCoverGridSection = (headingText, list, isAnimSection) => {
+        if (list.length === 0) return;
+        const grp = document.createElement("div");
+        grp.className = "appearance-group";
+        const lbl = document.createElement("span");
+        lbl.className = "small-caps-meta";
+        lbl.textContent = headingText;
+        const grid = document.createElement("div");
+        grid.className = "cover-swatch-grid";
+        for (const cov of list) {
+          const cBtn = document.createElement("button");
+          cBtn.type = "button";
+          cBtn.className = `cover-mini-btn${
+            draft.cover_asset === cov.path ? " is-selected" : ""
+          }${isAnimSection ? " is-animated" : ""}`;
+          cBtn.title = cov.label || "Cover wash";
+          const img = document.createElement("img");
+          img.src = resolveVaultUrl(cov.path);
+          img.alt = cov.label || "Cover wash";
+          cBtn.appendChild(img);
+          if (isAnimSection) {
+            const badge = document.createElement("span");
+            badge.className = "cover-live-badge";
+            badge.textContent = "Live";
+            cBtn.appendChild(badge);
+          }
+          cBtn.addEventListener("click", () => {
+            draft.cover_asset = cov.path;
+            coverPopoverOpen = false;
+            renderCoverBanner();
+            renderTopbar();
+            markDirtyAndScheduleSave();
+          });
+          grid.appendChild(cBtn);
+        }
+        grp.append(lbl, grid);
+        pop.appendChild(grp);
+      };
+
+      buildCoverGridSection("Animated Scenes", animatedCovers, true);
+      buildCoverGridSection("Watercolor Washes", staticCovers, false);
 
       const uploadLabel = document.createElement("label");
       uploadLabel.className = "topbar-ghost-btn cover-pop-full";
@@ -2284,6 +2449,7 @@ export function renderEntryEditor(container, state, callbacks = {}) {
             scale: 1.0,
             label: item.label || null,
           });
+          justPlacedStampId = id;
           syncStampOverlay();
           renderInsertBar();
           renderLedger();
@@ -3328,6 +3494,17 @@ export function renderEntryEditor(container, state, callbacks = {}) {
         updateAdjacentNavState();
       }
     },
+    syncFocusState: () => {
+      if (disposed) return;
+      const btn = topbar.querySelector('[data-role="zen-focus-btn"]');
+      if (btn) {
+        btn.classList.toggle("is-active", Boolean(state.focusZen));
+        btn.title = state.focusZen
+          ? "Exit Zen Focus mode (Ctrl+Shift+F)"
+          : "Zen Focus mode (Ctrl+Shift+F)";
+        btn.setAttribute("aria-label", btn.title);
+      }
+    },
     openFind: () => {
       if (disposed) return;
       findOpen = true;
@@ -3373,6 +3550,10 @@ export function renderEntryEditor(container, state, callbacks = {}) {
       if (shrinkRaf) {
         cancelAnimationFrame(shrinkRaf);
         shrinkRaf = null;
+      }
+      if (progressRaf) {
+        cancelAnimationFrame(progressRaf);
+        progressRaf = 0;
       }
       if (topbarPopoverAbort) {
         topbarPopoverAbort.abort();

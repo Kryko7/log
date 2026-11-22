@@ -69,22 +69,32 @@ function buildNotebookForm({
 
   const coverRow = document.createElement("div");
   coverRow.className = "cover-swatch-row";
-  const builtInCovers = (state.manifest?.covers || []).slice(0, 4);
+  const builtInCovers = state.manifest?.covers || [];
 
   function renderCoverSwatches() {
     coverRow.innerHTML = "";
     for (const cov of builtInCovers) {
+      const isAnimated =
+        Array.isArray(cov.tags) && cov.tags.includes("animated");
       const sw = document.createElement("button");
       sw.type = "button";
       sw.className = `cover-swatch-btn${
         currentCover === cov.path ? " selected" : ""
-      }`;
-      sw.title = cov.label || "Cover wash";
+      }${isAnimated ? " is-animated" : ""}`;
+      sw.title = isAnimated
+        ? `${cov.label || "Animated cover"} (Animated)`
+        : cov.label || "Cover wash";
       const img = document.createElement("img");
       img.src = resolveVaultUrl(cov.path);
       img.alt = cov.label || "Cover";
       img.decoding = "async";
       sw.appendChild(img);
+      if (isAnimated) {
+        const dot = document.createElement("span");
+        dot.className = "cover-live-dot";
+        dot.setAttribute("aria-hidden", "true");
+        sw.appendChild(dot);
+      }
       sw.addEventListener("click", () => {
         currentCover = cov.path;
         onCoverChange?.(currentCover);

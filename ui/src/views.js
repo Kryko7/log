@@ -1558,7 +1558,13 @@ export function createPolaroidElement(photo, figureNumber, callbacks = {}) {
  * @param {boolean} editable
  * @param {function} onChange
  */
-export function renderStampOverlay(container, stamps = [], editable = false, onChange = null) {
+export function renderStampOverlay(
+  container,
+  stamps = [],
+  editable = false,
+  onChange = null,
+  justPlacedId = null
+) {
   if (container._stampOverlayAbort) {
     container._stampOverlayAbort.abort();
     container._stampOverlayAbort = null;
@@ -1643,10 +1649,12 @@ export function renderStampOverlay(container, stamps = [], editable = false, onC
         "div",
         `placed-stamp-node ${kindClass}${
           editable && selectedId === st.id ? " is-selected" : ""
-        }`
+        }${justPlacedId && st.id === justPlacedId ? " is-just-placed" : ""}`
       );
       node.style.left = `${st.x_pct}%`;
       node.style.top = `${st.y_pct}%`;
+      node.style.setProperty("--stamp-rot", `${st.rotation_deg || 0}deg`);
+      node.style.setProperty("--stamp-scale", String(st.scale || 1));
       node.style.transform = `translate(-50%, -50%) rotate(${st.rotation_deg || 0}deg) scale(${
         st.scale || 1
       })`;
@@ -3460,7 +3468,8 @@ export function renderShortcutsModal(container, callbacks = {}) {
         ["Ctrl + N", "Start a new entry"],
         ["Ctrl + S", "Save current entry immediately"],
         ["Ctrl + E", "Toggle Write / Read mode"],
-        ["Ctrl + \\", "Toggle sidebar (Focus mode)"],
+        ["Ctrl + Shift + F", "Toggle Zen Focus mode"],
+        ["Ctrl + \\", "Toggle sidebar"],
         ["Alt + Left / Right", "Previous / Next entry"],
         ["Ctrl + 1 / 2 / 3 / 4", "Editor / All Entries / Calendar / On This Day"],
         ["Ctrl + /", "Show keyboard shortcuts"],
