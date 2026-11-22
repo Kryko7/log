@@ -10,9 +10,22 @@ import {
   renderSearchModal,
   renderMigrationModal,
   renderBackupModal,
+  renderInsightsModal,
+  renderShortcutsModal,
 } from "./views.js";
 
 const now = new Date();
+
+function emptySearchFilters() {
+  return {
+    starred_only: false,
+    notebook_id: "",
+    mood: "",
+    tag: "",
+    from_date: "",
+    to_date: "",
+  };
+}
 
 const state = {
   nightMode: localStorage.getItem("log_theme") === "night",
@@ -34,16 +47,20 @@ const state = {
 
   selectedNotebookId: null,
   selectedTag: null,
+  starredOnly: false,
   currentEntry: null,
 
   calendarYear: now.getFullYear(),
   calendarMonth: now.getMonth() + 1,
   calendarDays: [],
+  calendarSelectedDate: null,
 
-  activeModal: null, // null | "search" | "migration" | "backup"
+  activeModal: null, // null | "search" | "migration" | "backup" | "insights" | "shortcuts"
   searchQuery: "",
+  searchFilters: emptySearchFilters(),
   searchResults: [],
   searchLoading: false,
+  vaultSyncing: false,
 
   migrationLoading: false,
   migrationError: null,
@@ -71,6 +88,7 @@ let mainScrollEl = null;
 let reopenBtnEl = null;
 let viewRoot = null;
 let modalRoot = null;
+let toastRoot = null;
 let paperShader = null;
 let activeEditorHandle = null;
 let searchDebounceTimer = null;
@@ -79,6 +97,29 @@ let calendarLoadSeq = 0;
 let searchSeq = 0;
 let refreshSeq = 0;
 let statsDebounceTimer = null;
+
+function showToast(message, tone = "info") {
+  if (!toastRoot || !message) return;
+  const toast = document.createElement("div");
+  toast.className = `editorial-toast is-${tone}`;
+  toast.setAttribute("role", "status");
+  const icName =
+    tone === "success" ? "check" : tone === "error" ? "close" : "spark";
+  const icWrap = document.createElement("span");
+  icWrap.className = "toast-icon-wrap";
+  icWrap.innerHTML = icon(icName, "tiny-icon");
+  const msg = document.createElement("span");
+  msg.textContent = String(message);
+  toast.append(icWrap, msg);
+  toastRoot.appendChild(toast);
+
+  const dismiss = () => {
+    toast.classList.add("is-leaving");
+    setTimeout(() => toast.remove(), 220);
+  };
+  toast.addEventListener("click", dismiss);
+  setTimeout(dismiss, tone === "error" ? 4500 : 2800);
+}
 
 function applyTheme(isNight) {
   state.nightMode = Boolean(isNight);
@@ -125,37 +166,48 @@ function recomputeFilteredEntries() {
     ) {
       return false;
     }
+    if (state.starredOnly && !e.starred) {
+      return false;
+    }
     return true;
   });
 }
 
-function createBlankEntry(dateStr = null) {
+function createBlankEntry(dateStr = null, overrides = null) {
   const iso = dateStr
     ? new Date(`${dateStr}T12:00:00`).toISOString()
     : new Date().toISOString();
   const nbId =
-    state.selectedNotebookId || state.notebooks?.[0]?.id || "daily";
+    overrides?.notebook_id ||
+    state.selectedNotebookId ||
+    state.notebooks?.[0]?.id ||
+    "daily";
   return {
     id: null,
     frontmatter: {
       id: null,
-      title: "",
+      title: overrides?.title || "",
       date: iso,
       updated_at: iso,
       notebook_id: nbId,
-      tags: state.selectedTag ? [state.selectedTag] : [],
-      mood: null,
-      starred: false,
-      source: "native",
+      tags: Array.isArray(overrides?.tags)
+        ? [...overrides.tags]
+        : state.selectedTag
+          ? [state.selectedTag]
+          : [],
+      mood: overrides?.mood ?? null,
+      starred: Boolean(overrides?.starred),
+      source: "log",
       source_id: null,
-      weather: null,
-      location: null,
+      weather: overrides?.weather ? { ...overrides.weather } : null,
+      location: overrides?.location ? { ...overrides.location } : null,
       stamps: [],
       photos: [],
       audio: [],
+      cover_asset: overrides?.cover_asset ?? null,
       links: [],
     },
-    body: "",
+    body: overrides?.body || "",
     html_preview: "",
     path: "",
     word_count: 0,
@@ -231,7 +283,7 @@ async function refreshVaultIndex() {
     await Promise.allSettled([
       api.getVaultStats(),
       api.listNotebooks(),
-      api.listEntries({ limit: 1000, offset: 0 }),
+      api.listEntries({}),
       api.listTags(),
       api.getOnThisDay(),
     ]);
@@ -297,12 +349,13 @@ async function openEntryById(id, turnDir = null) {
     state.pageTurnDir = null;
   } catch (err) {
     console.error("Failed to open entry:", err);
+    showToast(err?.message || "Failed to open entry", "error");
   }
 }
 
-async function startNewEntry(dateStr = null) {
+async function startNewEntry(dateStr = null, overrides = null) {
   await activeEditorHandle?.flushSave();
-  state.currentEntry = createBlankEntry(dateStr);
+  state.currentEntry = createBlankEntry(dateStr, overrides);
   state.activeView = "editor";
   state.editorMode = "write";
   state.pageTurnDir = null;
@@ -315,11 +368,20 @@ async function navigateToView(viewKey) {
   if (viewKey !== "editor") {
     await activeEditorHandle?.flushSave();
   }
-  state.activeView = viewKey;
-  if (viewKey === "timeline") {
+  if (viewKey === "starred") {
+    state.activeView = "timeline";
     state.selectedNotebookId = null;
     state.selectedTag = null;
+    state.starredOnly = true;
     recomputeFilteredEntries();
+  } else {
+    state.activeView = viewKey;
+    if (viewKey === "timeline") {
+      state.selectedNotebookId = null;
+      state.selectedTag = null;
+      state.starredOnly = false;
+      recomputeFilteredEntries();
+    }
   }
   if (viewKey === "calendar") {
     await loadCalendarMonth(state.calendarYear, state.calendarMonth);
@@ -402,6 +464,7 @@ async function handleDeleteNotebook(nbId, deleteEntries = false) {
   }
   renderSidebarOnly();
   renderMainView();
+  showToast("Notebook deleted", "info");
 }
 
 async function handleDeleteEntry(id) {
@@ -442,10 +505,12 @@ function getSidebarCallbacks() {
       await refreshVaultIndex();
       state.selectedNotebookId = nb.id;
       state.selectedTag = null;
+      state.starredOnly = false;
       state.activeView = "timeline";
       recomputeFilteredEntries();
       renderSidebarOnly();
       renderMainView();
+      showToast(`Created notebook "${nb.name}"`, "success");
     },
     onUpdateNotebook: handleUpdateNotebook,
     onDeleteNotebook: handleDeleteNotebook,
@@ -456,6 +521,7 @@ function getSidebarCallbacks() {
       }
       state.selectedNotebookId = nbId;
       state.selectedTag = null;
+      state.starredOnly = false;
       state.activeView = "timeline";
       recomputeFilteredEntries();
       renderSidebarOnly();
@@ -466,6 +532,7 @@ function getSidebarCallbacks() {
         await activeEditorHandle?.flushSave();
       }
       state.selectedTag = tag;
+      state.starredOnly = false;
       state.activeView = "timeline";
       recomputeFilteredEntries();
       renderSidebarOnly();
@@ -473,6 +540,8 @@ function getSidebarCallbacks() {
     },
     onOpenMigration: () => openModal("migration"),
     onOpenBackup: () => openModal("backup"),
+    onOpenInsights: () => openModal("insights"),
+    onOpenShortcuts: () => openModal("shortcuts"),
     onToggleTheme: () => {
       applyTheme(!state.nightMode);
       renderSidebarOnly();
@@ -499,6 +568,35 @@ function renderMainView() {
     }
     activeEditorHandle = renderEntryEditor(viewRoot, state, {
       onNewEntry: () => startNewEntry(),
+      onDuplicateEntry: async (seed) => {
+        await activeEditorHandle?.flushSave();
+        const saved = await api.saveEntry({
+          id: null,
+          title: seed.title || "",
+          date: new Date().toISOString(),
+          notebook_id: seed.notebook_id || state.selectedNotebookId || "daily",
+          tags: Array.isArray(seed.tags) ? seed.tags : [],
+          mood: seed.mood ?? null,
+          starred: false,
+          weather: seed.weather ?? null,
+          location: seed.location ?? null,
+          stamps: [],
+          photos: [],
+          audio: [],
+          cover_asset: seed.cover_asset ?? null,
+          body: seed.body || "",
+        });
+        state.currentEntry = saved;
+        state.activeView = "editor";
+        state.editorMode = "write";
+        upsertEntrySummaryFromSaved(saved);
+        refreshVaultIndex()
+          .then(() => activeEditorHandle?.syncNav?.())
+          .catch(() => {});
+        renderSidebarOnly();
+        renderMainView();
+        showToast("Entry duplicated", "success");
+      },
       onOpenEntry: (id, dir = null) => openEntryById(id, dir),
       onNavigate: (viewKey) => navigateToView(viewKey),
       onModeChange: (m) => {
@@ -506,7 +604,20 @@ function renderMainView() {
       },
       onSearchText: (query) => {
         state.searchQuery = query;
+        state.searchFilters = emptySearchFilters();
         openModal("search");
+      },
+      onToast: (msg, tone) => showToast(msg, tone),
+      onSaveTemplate: async (req) => {
+        const saved = await api.saveTemplate(req);
+        state.templates = await api.listTemplates();
+        showToast(`Saved template "${saved.name}"`, "success");
+        return saved;
+      },
+      onDeleteTemplate: async (id) => {
+        await api.deleteTemplate(id);
+        state.templates = await api.listTemplates();
+        showToast("Template removed", "info");
       },
       onSaveEntry: async (payload, meta = {}) => {
         const saved = await api.saveEntry(payload);
@@ -517,14 +628,20 @@ function renderMainView() {
         ) {
           state.currentEntry = saved;
         }
+        upsertEntrySummaryFromSaved(saved);
         if (meta?.structural) {
-          refreshVaultIndex().catch(() => {});
-        } else {
-          upsertEntrySummaryFromSaved(saved);
+          refreshVaultIndex()
+            .then(() => {
+              activeEditorHandle?.syncNav?.();
+            })
+            .catch(() => {});
         }
         return saved;
       },
-      onDeleteEntry: (id) => handleDeleteEntry(id),
+      onDeleteEntry: async (id) => {
+        await handleDeleteEntry(id);
+        showToast("Entry deleted", "info");
+      },
     });
     return;
   }
@@ -543,7 +660,10 @@ function renderMainView() {
       onUpdateNotebook: handleUpdateNotebook,
       onDeleteNotebook: handleDeleteNotebook,
       onUploadNotebookCover: handleUploadNotebookCover,
-      onDeleteEntry: (id) => handleDeleteEntry(id),
+      onDeleteEntry: async (id) => {
+        await handleDeleteEntry(id);
+        showToast("Entry deleted", "info");
+      },
     });
     return;
   }
@@ -557,6 +677,7 @@ function renderMainView() {
           m = 12;
           y -= 1;
         }
+        state.calendarSelectedDate = null;
         await loadCalendarMonth(y, m);
         renderMainView();
       },
@@ -567,23 +688,29 @@ function renderMainView() {
           m = 1;
           y += 1;
         }
+        state.calendarSelectedDate = null;
         await loadCalendarMonth(y, m);
         renderMainView();
       },
       onSelectMonth: async (y, m) => {
+        state.calendarSelectedDate = null;
         await loadCalendarMonth(y, m);
         renderMainView();
       },
-      onSelectDate: (dateStr, summary) => {
-        if (summary?.primary_entry_id) {
-          openEntryById(summary.primary_entry_id);
-        } else {
-          startNewEntry(dateStr);
-        }
+      onChangeNotebookFilter: async (nbId) => {
+        state.selectedNotebookId = nbId || null;
+        state.calendarSelectedDate = null;
+        recomputeFilteredEntries();
+        await loadCalendarMonth(state.calendarYear, state.calendarMonth);
+        renderSidebarOnly();
+        renderMainView();
       },
       onOpenEntry: (id) => openEntryById(id),
       onNewEntryForDate: (dateStr) => startNewEntry(dateStr),
-      onDeleteEntry: (id) => handleDeleteEntry(id),
+      onDeleteEntry: async (id) => {
+        await handleDeleteEntry(id);
+        showToast("Entry deleted", "info");
+      },
     });
     return;
   }
@@ -591,27 +718,50 @@ function renderMainView() {
   if (state.activeView === "on_this_day") {
     renderOnThisDayView(viewRoot, state, {
       onOpenEntry: (id) => openEntryById(id),
-      onDeleteEntry: (id) => handleDeleteEntry(id),
+      onDeleteEntry: async (id) => {
+        await handleDeleteEntry(id);
+        showToast("Entry deleted", "info");
+      },
     });
   }
 }
 
-async function runSearchQuery(text) {
+function hasActiveSearchCriteria() {
+  const f = state.searchFilters || {};
+  return Boolean(
+    (state.searchQuery || "").trim() ||
+      f.starred_only ||
+      f.notebook_id ||
+      f.mood ||
+      f.tag ||
+      f.from_date ||
+      f.to_date
+  );
+}
+
+async function runSearchQuery(text = state.searchQuery) {
   const seq = ++searchSeq;
   state.searchQuery = text;
-  const trimmed = text.trim();
-  if (!trimmed) {
+  const trimmed = String(text || "").trim();
+  const f = state.searchFilters || {};
+  if (!hasActiveSearchCriteria()) {
     state.searchResults = [];
     state.searchLoading = false;
-    renderModal();
+    if (state.activeModal === "search") renderModal();
     return;
   }
   state.searchLoading = true;
-  renderModal();
+  if (state.activeModal === "search") renderModal();
   try {
     const hits = await api.searchEntries({
-      text: trimmed,
-      limit: 40,
+      text: trimmed || null,
+      notebook_id: f.notebook_id || null,
+      tag: f.tag || null,
+      mood: f.mood || null,
+      starred_only: Boolean(f.starred_only),
+      from_date: f.from_date || null,
+      to_date: f.to_date || null,
+      limit: 50,
       offset: 0,
     });
     if (seq !== searchSeq) return;
@@ -633,7 +783,7 @@ async function openModal(modalName) {
   state.activeModal = modalName;
   if (modalName === "search") {
     renderModal();
-    if (state.searchQuery.trim()) {
+    if (hasActiveSearchCriteria()) {
       runSearchQuery(state.searchQuery);
     }
     return;
@@ -641,6 +791,24 @@ async function openModal(modalName) {
   if (modalName === "migration") {
     state.migrationError = null;
     renderModal();
+    return;
+  }
+  if (modalName === "shortcuts") {
+    renderModal();
+    return;
+  }
+  if (modalName === "insights") {
+    renderModal();
+    api
+      .getVaultStats()
+      .then((s) => {
+        if (s) {
+          state.stats = s;
+          renderSidebarOnly();
+          if (state.activeModal === "insights") renderModal();
+        }
+      })
+      .catch(() => {});
     return;
   }
   if (modalName === "backup") {
@@ -697,110 +865,174 @@ function renderModal() {
           runSearchQuery(q);
         }, 160);
       },
+      onFilterChange: (patch) => {
+        state.searchFilters = {
+          ...(state.searchFilters || emptySearchFilters()),
+          ...patch,
+        };
+        runSearchQuery(state.searchQuery);
+      },
+      onResetSearch: () => {
+        state.searchQuery = "";
+        state.searchFilters = emptySearchFilters();
+        state.searchResults = [];
+        renderModal();
+      },
       onSelectEntry: (id) => openEntryById(id),
       onClose: closeModal,
     });
     return;
   }
 
+  if (state.activeModal === "insights") {
+    renderInsightsModal(modalRoot, state, {
+      onSelectTag: async (tag) => {
+        if (state.activeView === "editor") {
+          await activeEditorHandle?.flushSave();
+        }
+        state.selectedTag = tag;
+        state.starredOnly = false;
+        state.activeView = "timeline";
+        recomputeFilteredEntries();
+        renderSidebarOnly();
+        renderMainView();
+      },
+      onOpenVaultFolder: async () => {
+        try {
+          await api.openVaultFolder();
+        } catch (err) {
+          showToast(err?.message || "Failed to open vault folder", "error");
+        }
+      },
+      onSyncVault: async (fullRebuild) => {
+        state.vaultSyncing = true;
+        renderModal();
+        try {
+          const res = await api.syncVault(fullRebuild);
+          await refreshVaultIndex();
+          state.templates = await api.listTemplates().catch(() => state.templates);
+          if (state.activeView === "editor" && state.currentEntry?.id) {
+            try {
+              state.currentEntry = await api.getEntry(state.currentEntry.id);
+              renderMainView();
+            } catch {
+              // ignore if deleted externally
+            }
+          } else if (state.activeView !== "editor") {
+            if (state.activeView === "calendar") {
+              await loadCalendarMonth(state.calendarYear, state.calendarMonth);
+            }
+            renderMainView();
+          }
+          showToast(
+            res.full_rebuild
+              ? `Rebuilt index (${res.indexed_count} entries)`
+              : res.indexed_count > 0
+                ? `Synced ${res.indexed_count} external changes`
+                : "Vault index is up to date",
+            "success"
+          );
+        } catch (err) {
+          showToast(err?.message || "Vault sync failed", "error");
+        } finally {
+          state.vaultSyncing = false;
+          if (state.activeModal === "insights") renderModal();
+        }
+      },
+      onClose: closeModal,
+    });
+    return;
+  }
+
+  if (state.activeModal === "shortcuts") {
+    renderShortcutsModal(modalRoot, {
+      onClose: closeModal,
+    });
+    return;
+  }
+
   if (state.activeModal === "migration") {
+    const runImportTask = async (fn, dryRun, fallbackErr) => {
+      state.migrationLoading = true;
+      state.migrationError = null;
+      renderModal();
+      try {
+        state.migrationReport = await fn();
+        if (!dryRun) {
+          await refreshVaultIndex();
+          if (state.activeView === "timeline") renderMainView();
+          else if (state.activeView === "calendar") {
+            await loadCalendarMonth(state.calendarYear, state.calendarMonth);
+            renderMainView();
+          }
+          showToast(
+            `Imported ${state.migrationReport?.imported_count ?? 0} entries`,
+            "success"
+          );
+        }
+      } catch (err) {
+        state.migrationError = err?.message || fallbackErr;
+      } finally {
+        state.migrationLoading = false;
+        if (state.activeModal === "migration") renderModal();
+      }
+    };
+
     renderMigrationModal(modalRoot, state, {
-      onImportDayOnePath: async (zipPath, dryRun) => {
-        state.migrationLoading = true;
-        state.migrationError = null;
-        renderModal();
-        try {
-          state.migrationReport = await api.importDayone({
-            zip_path: zipPath,
-            notebook_id: state.selectedNotebookId,
-            dry_run: dryRun,
-          });
-          if (!dryRun) {
-            await refreshVaultIndex();
-            if (state.activeView === "timeline") renderMainView();
-          }
-        } catch (err) {
-          state.migrationError = err?.message || "Day One import failed.";
-        } finally {
-          state.migrationLoading = false;
-          if (state.activeModal === "migration") renderModal();
-        }
-      },
-      onImportNotionPath: async (sourcePath, dryRun) => {
-        state.migrationLoading = true;
-        state.migrationError = null;
-        renderModal();
-        try {
-          state.migrationReport = await api.importNotion({
-            source_path: sourcePath,
-            notebook_id: state.selectedNotebookId,
-            dry_run: dryRun,
-          });
-          if (!dryRun) {
-            await refreshVaultIndex();
-            if (state.activeView === "timeline") renderMainView();
-          }
-        } catch (err) {
-          state.migrationError = err?.message || "Notion import failed.";
-        } finally {
-          state.migrationLoading = false;
-          if (state.activeModal === "migration") renderModal();
-        }
-      },
-      onImportDayOneFile: async (file, dryRun = false) => {
-        if (file?.path) {
-          state.migrationLoading = true;
-          state.migrationError = null;
-          renderModal();
-          try {
-            state.migrationReport = await api.importDayone({
-              zip_path: file.path,
-              notebook_id: state.selectedNotebookId,
+      onImportDayOnePath: (zipPath, dryRun, notebookId = null) =>
+        runImportTask(
+          () =>
+            api.importDayone({
+              zip_path: zipPath,
+              notebook_id: notebookId ?? state.selectedNotebookId,
               dry_run: Boolean(dryRun),
-            });
-            if (!dryRun) {
-              await refreshVaultIndex();
-              if (state.activeView === "timeline") renderMainView();
-            }
-          } catch (err) {
-            state.migrationError = err?.message || "Import failed.";
-          } finally {
-            state.migrationLoading = false;
-            if (state.activeModal === "migration") renderModal();
-          }
-          return;
-        }
-        state.migrationError =
-          "Enter the full local path to your Day One .zip or folder below and click Import Path.";
-        renderModal();
-      },
-      onImportNotionFile: async (file, dryRun = false) => {
-        if (file?.path) {
-          state.migrationLoading = true;
-          state.migrationError = null;
-          renderModal();
-          try {
-            state.migrationReport = await api.importNotion({
-              source_path: file.path,
-              notebook_id: state.selectedNotebookId,
+            }),
+          dryRun,
+          "Day One import failed."
+        ),
+      onImportNotionPath: (sourcePath, dryRun, notebookId = null) =>
+        runImportTask(
+          () =>
+            api.importNotion({
+              source_path: sourcePath,
+              notebook_id: notebookId ?? state.selectedNotebookId,
               dry_run: Boolean(dryRun),
-            });
-            if (!dryRun) {
-              await refreshVaultIndex();
-              if (state.activeView === "timeline") renderMainView();
-            }
-          } catch (err) {
-            state.migrationError = err?.message || "Import failed.";
-          } finally {
-            state.migrationLoading = false;
-            if (state.activeModal === "migration") renderModal();
-          }
-          return;
-        }
-        state.migrationError =
-          "Enter the full local path to your Notion export .zip or folder below and click Import Path.";
-        renderModal();
-      },
+            }),
+          dryRun,
+          "Notion import failed."
+        ),
+      onImportDayOneFile: (file, dryRun = false, notebookId = null) =>
+        runImportTask(
+          () =>
+            file?.path
+              ? api.importDayone({
+                  zip_path: file.path,
+                  notebook_id: notebookId ?? state.selectedNotebookId,
+                  dry_run: Boolean(dryRun),
+                })
+              : api.importArchiveUpload("dayone", file, {
+                  notebook_id: notebookId ?? state.selectedNotebookId,
+                  dry_run: Boolean(dryRun),
+                }),
+          dryRun,
+          "Day One archive import failed."
+        ),
+      onImportNotionFile: (file, dryRun = false, notebookId = null) =>
+        runImportTask(
+          () =>
+            file?.path
+              ? api.importNotion({
+                  source_path: file.path,
+                  notebook_id: notebookId ?? state.selectedNotebookId,
+                  dry_run: Boolean(dryRun),
+                })
+              : api.importArchiveUpload("notion", file, {
+                  notebook_id: notebookId ?? state.selectedNotebookId,
+                  dry_run: Boolean(dryRun),
+                }),
+          dryRun,
+          "Notion archive import failed."
+        ),
       onClose: closeModal,
     });
     return;
@@ -1028,14 +1260,21 @@ function mountShell() {
   modalRoot = document.createElement("div");
   modalRoot.id = "modal-root";
 
-  root.append(shellEl, modalRoot);
+  toastRoot = document.createElement("div");
+  toastRoot.id = "toast-root";
+  toastRoot.className = "editorial-toast-stack";
+  toastRoot.setAttribute("aria-live", "polite");
+
+  root.append(shellEl, modalRoot, toastRoot);
   app.appendChild(root);
 }
 
 function wireGlobalShortcuts() {
   window.addEventListener("keydown", (ev) => {
     const mod = ev.ctrlKey || ev.metaKey;
-    if (mod && ev.key.toLowerCase() === "k") {
+    const key = ev.key.toLowerCase();
+
+    if (mod && key === "k") {
       ev.preventDefault();
       if (state.activeModal === "search") {
         closeModal();
@@ -1049,14 +1288,98 @@ function wireGlobalShortcuts() {
       applySidebarCollapsed(!state.sidebarCollapsed);
       return;
     }
+    if (mod && ev.key === "/") {
+      ev.preventDefault();
+      if (state.activeModal === "shortcuts") {
+        closeModal();
+      } else {
+        openModal("shortcuts");
+      }
+      return;
+    }
+    if (mod && key === "n" && !ev.shiftKey && !state.activeModal) {
+      ev.preventDefault();
+      startNewEntry();
+      return;
+    }
+    if (mod && key === "f" && !ev.shiftKey && !ev.altKey) {
+      if (state.activeView === "editor" && !state.activeModal) {
+        ev.preventDefault();
+        activeEditorHandle?.openFind?.();
+      }
+      return;
+    }
+    if (mod && key === "s" && !ev.shiftKey) {
+      ev.preventDefault();
+      if (
+        !state.activeModal &&
+        state.activeView === "editor" &&
+        activeEditorHandle?.saveNow
+      ) {
+        activeEditorHandle
+          .saveNow()
+          .then((saved) => {
+            if (saved) showToast("Entry saved", "success");
+          })
+          .catch((err) => {
+            showToast(err?.message || "Save failed", "error");
+          });
+      }
+      return;
+    }
     if (
       mod &&
-      ev.key.toLowerCase() === "e" &&
+      key === "e" &&
       state.activeView === "editor" &&
       !state.activeModal
     ) {
       ev.preventDefault();
       activeEditorHandle?.toggleMode();
+      return;
+    }
+    if (mod && !ev.shiftKey && !ev.altKey && !state.activeModal) {
+      if (ev.key === "1") {
+        ev.preventDefault();
+        navigateToView("editor");
+        return;
+      }
+      if (ev.key === "2") {
+        ev.preventDefault();
+        navigateToView("timeline");
+        return;
+      }
+      if (ev.key === "3") {
+        ev.preventDefault();
+        navigateToView("calendar");
+        return;
+      }
+      if (ev.key === "4") {
+        ev.preventDefault();
+        navigateToView("on_this_day");
+        return;
+      }
+    }
+    const activeTag = document.activeElement?.tagName;
+    const isEditingField =
+      activeTag === "INPUT" ||
+      activeTag === "TEXTAREA" ||
+      activeTag === "SELECT" ||
+      Boolean(document.activeElement?.isContentEditable);
+
+    if (
+      ev.altKey &&
+      !mod &&
+      !isEditingField &&
+      state.activeView === "editor" &&
+      !state.activeModal
+    ) {
+      if (ev.key === "ArrowLeft") {
+        ev.preventDefault();
+        activeEditorHandle?.goAdjacent?.("prev");
+      } else if (ev.key === "ArrowRight") {
+        ev.preventDefault();
+        activeEditorHandle?.goAdjacent?.("next");
+      }
     }
   });
 }
@@ -1087,7 +1410,7 @@ async function bootstrap() {
   ] = await Promise.allSettled([
     api.getVaultStats(),
     api.listNotebooks(),
-    api.listEntries({ limit: 1000, offset: 0 }),
+    api.listEntries({}),
     api.listTags(),
     api.getAssetManifest(),
     api.listTemplates(),

@@ -1,10 +1,11 @@
-import { api } from "./ipc.js";
+import { api, resolveVaultUrl } from "./ipc.js";
 import { icon, weatherIcon } from "./icons.js";
 import { renderMarkdownReadView, extractWikilinks } from "./markdown.js";
 import { createVoiceRecorder, createWaveformPlayer } from "./audio.js";
 import {
   isAutoDerivedTitle,
   createPolaroidElement,
+  openPolaroidLightbox,
   renderStampOverlay,
   renderStampPickerPopover,
 } from "./views.js";
@@ -19,6 +20,24 @@ const MOOD_OPTIONS = [
   "restless",
   "joyful",
 ];
+
+const WEATHER_PRESETS = [
+  { condition: "Clear", icon_key: "sun" },
+  { condition: "Partly Cloudy", icon_key: "cloud" },
+  { condition: "Overcast", icon_key: "cloud" },
+  { condition: "Light Rain", icon_key: "rain" },
+  { condition: "Heavy Rain", icon_key: "rain" },
+  { condition: "Storm", icon_key: "storm" },
+  { condition: "Fog", icon_key: "fog" },
+  { condition: "Snow", icon_key: "snow" },
+];
+
+const STARTER_TEMPLATE_IDS = new Set([
+  "evening-reflection",
+  "morning-pages",
+  "field-travel-notes",
+  "quiet-gratitude",
+]);
 
 const SLASH_COMMANDS = [
   {
@@ -106,8 +125,66 @@ const SLASH_COMMANDS = [
   },
 ];
 
-// Session-local optional cover banner selection keyed by entry ID
-const sessionEntryCovers = new Map();
+function toLocalDateInputValue(isoDate) {
+  const d = isoDate ? new Date(isoDate) : new Date();
+  const valid = !Number.isNaN(d.getTime()) ? d : new Date();
+  const y = valid.getFullYear();
+  const m = String(valid.getMonth() + 1).padStart(2, "0");
+  const day = String(valid.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function toLocalTimeInputValue(isoDate) {
+  const d = isoDate ? new Date(isoDate) : new Date();
+  const valid = !Number.isNaN(d.getTime()) ? d : new Date();
+  const hh = String(valid.getHours()).padStart(2, "0");
+  const mm = String(valid.getMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+function buildExportMarkdown(draft) {
+  const title =
+    draft.titleInput.trim() ||
+    draft.hiddenAutoTitle ||
+    deriveFallbackTitle(draft.body, draft.date);
+  const lines = ["---"];
+  lines.push(`title: "${title.replace(/"/g, '\\"')}"`);
+  lines.push(`date: "${draft.date}"`);
+  if (draft.notebook_id) lines.push(`notebook: "${draft.notebook_id}"`);
+  if (draft.mood) lines.push(`mood: "${draft.mood}"`);
+  if (draft.starred) lines.push("starred: true");
+  if (draft.location?.place_name) {
+    lines.push(`location: "${draft.location.place_name.replace(/"/g, '\\"')}"`);
+  }
+  if (draft.weather?.condition) {
+    const temp =
+      typeof draft.weather.temperature_c === "number"
+        ? ` (${Math.round(draft.weather.temperature_c)}°C)`
+        : "";
+    lines.push(`weather: "${draft.weather.condition}${temp}"`);
+  }
+  if (draft.tags.length > 0) {
+    lines.push(`tags: [${draft.tags.map((t) => `"${t}"`).join(", ")}]`);
+  }
+  lines.push("---", "");
+  if (title && !isAutoDerivedTitle(title, draft.body)) {
+    lines.push(`# ${title}`, "");
+  }
+  lines.push(draft.body || "");
+  return lines.join("\n");
+}
+
+function downloadTextFile(filename, text, mime = "text/markdown;charset=utf-8") {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
 function iconNode(name, cls = "tiny-icon") {
   const wrap = document.createElement("span");
@@ -261,6 +338,7 @@ export function renderEntryEditor(container, state, callbacks = {}) {
     stamps: Array.isArray(fm.stamps) ? fm.stamps.map((s) => ({ ...s })) : [],
     photos: Array.isArray(fm.photos) ? fm.photos.map((p) => ({ ...p })) : [],
     audio: Array.isArray(fm.audio) ? fm.audio.map((a) => ({ ...a })) : [],
+    cover_asset: fm.cover_asset || null,
     body: initialBody,
     path: entry.path || "",
     backlinks: Array.isArray(entry.backlinks) ? [...entry.backlinks] : [],
@@ -281,18 +359,21 @@ export function renderEntryEditor(container, state, callbacks = {}) {
   let lastNewlineCount = countNewlines(initialBody);
   let deleteConfirmOpen = false;
   let coverPopoverOpen = false;
-  let coverPopoverAbort = null;
+  let moreMenuOpen = false;
+  let datePopoverOpen = false;
+  let weatherPopoverOpen = false;
+  let topbarPopoverAbort = null;
+  let datePopoverAbort = null;
+  let weatherPopoverAbort = null;
   let promptDismissed = false;
-  let activeInlineTool = null; // null | "voice" | "template" | "link" | "stamp"
+  let activeInlineTool = null; // null | "voice" | "template" | "link" | "stamp" | "save_template"
   let activeRecorderCard = null;
   let activeWaveformRibbons = [];
   let slashState = null; // { query, start, end, selectedIndex }
   let locationEditing = false;
   let refocusTagInput = false;
+  let dragDepth = 0;
   const lifecycleAbort = new AbortController();
-
-  const coverKey = draft.id || "__draft__";
-  let coverAsset = sessionEntryCovers.get(coverKey) || null;
 
   const sheet = document.createElement("article");
   sheet.className = "entry-page-sheet";
@@ -325,12 +406,12 @@ export function renderEntryEditor(container, state, callbacks = {}) {
 
   const renderCoverBanner = () => {
     coverContainer.innerHTML = "";
-    if (!coverAsset) return;
+    if (!draft.cover_asset) return;
     const banner = document.createElement("div");
     banner.className = "entry-cover-banner";
     const img = document.createElement("img");
     img.className = "entry-cover-img";
-    img.src = coverAsset;
+    img.src = resolveVaultUrl(draft.cover_asset);
     img.alt = "Entry watercolor cover";
 
     const removeBtn = document.createElement("button");
@@ -338,9 +419,10 @@ export function renderEntryEditor(container, state, callbacks = {}) {
     removeBtn.className = "entry-cover-remove";
     removeBtn.textContent = "Remove cover";
     removeBtn.addEventListener("click", () => {
-      coverAsset = null;
-      sessionEntryCovers.delete(coverKey);
+      draft.cover_asset = null;
       renderCoverBanner();
+      renderTopbar();
+      markDirtyAndScheduleSave();
     });
 
     banner.append(img, removeBtn);
@@ -386,6 +468,7 @@ export function renderEntryEditor(container, state, callbacks = {}) {
       stamps: draft.stamps,
       photos: draft.photos,
       audio: draft.audio,
+      cover_asset: draft.cover_asset || null,
       body: draft.body,
     };
   };
@@ -504,10 +587,6 @@ export function renderEntryEditor(container, state, callbacks = {}) {
             if (hadNoId && saved.id) {
               assignedNewId = true;
             }
-            if (hadNoId && coverAsset) {
-              sessionEntryCovers.delete("__draft__");
-              sessionEntryCovers.set(saved.id, coverAsset);
-            }
           }
           savedVersion = targetVersion;
           dirty = editVersion > savedVersion;
@@ -546,15 +625,25 @@ export function renderEntryEditor(container, state, callbacks = {}) {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       performSave().catch(() => {});
-    }, 750);
+    }, 500);
   };
 
-  window.addEventListener(
-    "beforeunload",
+  const flushIfDirty = () => {
+    if (!disposed && (editVersion > savedVersion || dirty)) {
+      performSave().catch(() => {});
+    }
+  };
+
+  window.addEventListener("beforeunload", flushIfDirty, {
+    signal: lifecycleAbort.signal,
+  });
+  window.addEventListener("blur", flushIfDirty, {
+    signal: lifecycleAbort.signal,
+  });
+  document.addEventListener(
+    "visibilitychange",
     () => {
-      if (editVersion > savedVersion || dirty) {
-        performSave().catch(() => {});
-      }
+      if (document.hidden) flushIfDirty();
     },
     { signal: lifecycleAbort.signal }
   );
@@ -582,24 +671,62 @@ export function renderEntryEditor(container, state, callbacks = {}) {
   column.appendChild(photoInput);
 
   const handlePhotoFiles = async (files) => {
-    const list = Array.from(files || []).filter((f) =>
-      String(f.type || "").startsWith("image/") ||
-      /\.(png|jpe?g|webp|gif)$/i.test(f.name || "")
+    const all = Array.from(files || []);
+    const images = all.filter(
+      (f) =>
+        String(f.type || "").startsWith("image/") ||
+        /\.(png|jpe?g|webp|gif)$/i.test(f.name || "")
     );
-    if (!list.length) return;
-    for (const file of list) {
+    const audios = all.filter(
+      (f) =>
+        String(f.type || "").startsWith("audio/") ||
+        /\.(wav|mp3|ogg|opus|m4a|webm|flac)$/i.test(f.name || "")
+    );
+    if (!images.length && !audios.length) return;
+
+    let addedPhotos = 0;
+    for (const file of images) {
       try {
         const photo = await api.uploadPhoto(file, null);
         draft.photos.push(photo);
+        addedPhotos += 1;
       } catch (err) {
+        callbacks.onToast?.(err?.message || "Photo upload failed", "error");
         if (saveIndicatorEl) {
           saveIndicatorEl.classList.add("is-dirty");
           saveIndicatorEl.textContent = err?.message || "Photo upload failed";
         }
       }
     }
-    renderPhotosSection();
-    markDirtyAndScheduleSave(true);
+
+    let addedAudio = 0;
+    for (const file of audios) {
+      try {
+        const memo = await api.uploadAudio(file, file.name, null);
+        draft.audio.push(memo);
+        addedAudio += 1;
+      } catch (err) {
+        callbacks.onToast?.(err?.message || "Audio upload failed", "error");
+      }
+    }
+
+    if (addedPhotos > 0) {
+      renderPhotosSection();
+      callbacks.onToast?.(
+        addedPhotos === 1 ? "Photo attached" : `${addedPhotos} photos attached`,
+        "success"
+      );
+    }
+    if (addedAudio > 0) {
+      renderVoiceSection();
+      callbacks.onToast?.(
+        addedAudio === 1 ? "Audio note attached" : `${addedAudio} audio notes attached`,
+        "success"
+      );
+    }
+    if (addedPhotos > 0 || addedAudio > 0) {
+      markDirtyAndScheduleSave(true);
+    }
   };
 
   photoInput.addEventListener("change", async () => {
@@ -608,7 +735,14 @@ export function renderEntryEditor(container, state, callbacks = {}) {
     photoInput.value = "";
   });
 
-  // Drag & drop photo attach
+  // Drag & drop photo/audio attach (depth-tracked to avoid child hover flicker)
+  sheet.addEventListener("dragenter", (ev) => {
+    if (ev.dataTransfer?.types?.includes("Files")) {
+      ev.preventDefault();
+      dragDepth += 1;
+      sheet.classList.add("is-drag-over");
+    }
+  });
   sheet.addEventListener("dragover", (ev) => {
     if (ev.dataTransfer?.types?.includes("Files")) {
       ev.preventDefault();
@@ -616,9 +750,13 @@ export function renderEntryEditor(container, state, callbacks = {}) {
     }
   });
   sheet.addEventListener("dragleave", () => {
-    sheet.classList.remove("is-drag-over");
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) {
+      sheet.classList.remove("is-drag-over");
+    }
   });
   sheet.addEventListener("drop", async (ev) => {
+    dragDepth = 0;
     sheet.classList.remove("is-drag-over");
     if (ev.dataTransfer?.files?.length) {
       ev.preventDefault();
@@ -626,46 +764,288 @@ export function renderEntryEditor(container, state, callbacks = {}) {
     }
   });
 
-  // 1. Quiet Top Bar
+  // Clipboard image paste (Ctrl+V screenshot or copied image)
+  sheet.addEventListener("paste", async (ev) => {
+    const items = Array.from(ev.clipboardData?.items || []);
+    const imgFiles = items
+      .filter((it) => it.kind === "file" && String(it.type || "").startsWith("image/"))
+      .map((it) => it.getAsFile())
+      .filter(Boolean);
+    if (imgFiles.length > 0) {
+      ev.preventDefault();
+      await handlePhotoFiles(imgFiles);
+    }
+  });
+
+  // 1. Quiet Top Bar + Inline Find-in-Entry Bar
   const topbar = document.createElement("div");
   topbar.className = "entry-topbar";
   column.appendChild(topbar);
+
+  const findBarSlot = document.createElement("div");
+  findBarSlot.className = "entry-find-slot";
+  findBarSlot.hidden = true;
+  column.appendChild(findBarSlot);
+
+  let prevBtnEl = null;
+  let nextBtnEl = null;
+  let prevEntryRef = null;
+  let nextEntryRef = null;
+
+  const updateAdjacentNavState = () => {
+    const list = state.filteredEntries ?? state.entries ?? [];
+    const currentIdx = draft.id
+      ? list.findIndex((e) => e.id === draft.id)
+      : -1;
+    prevEntryRef =
+      currentIdx >= 0 && currentIdx + 1 < list.length
+        ? list[currentIdx + 1]
+        : null;
+    nextEntryRef = currentIdx > 0 ? list[currentIdx - 1] : null;
+    if (prevBtnEl) prevBtnEl.disabled = !prevEntryRef;
+    if (nextBtnEl) nextBtnEl.disabled = !nextEntryRef;
+  };
+
+  let findOpen = false;
+  let findQuery = "";
+  let findMatches = [];
+  let findIndex = 0;
+
+  const clearReadModeHighlights = () => {
+    if (mode !== "read" || !proseRegionEl) return;
+    const marks = proseRegionEl.querySelectorAll("mark.entry-find-match");
+    if (marks.length === 0) return;
+    renderProseRegion();
+  };
+
+  const applyFindHighlights = (shouldFocusMatch = false) => {
+    findMatches = [];
+    const q = findQuery.trim();
+    const countEl = findBarSlot.querySelector(".entry-find-count");
+
+    if (!q) {
+      clearReadModeHighlights();
+      if (countEl) countEl.textContent = "";
+      return;
+    }
+
+    const qLower = q.toLowerCase();
+    if (mode === "write" && textareaEl) {
+      const hay = textareaEl.value.toLowerCase();
+      let pos = 0;
+      while ((pos = hay.indexOf(qLower, pos)) !== -1) {
+        findMatches.push({ start: pos, end: pos + q.length });
+        pos += Math.max(1, q.length);
+      }
+      if (findMatches.length === 0) {
+        findIndex = 0;
+        if (countEl) countEl.textContent = "0 matches";
+        return;
+      }
+      findIndex = ((findIndex % findMatches.length) + findMatches.length) % findMatches.length;
+      if (countEl) countEl.textContent = `${findIndex + 1} / ${findMatches.length}`;
+      if (shouldFocusMatch) {
+        const m = findMatches[findIndex];
+        const findInputEl = findBarSlot.querySelector(".entry-find-input");
+        const keepFindFocus = Boolean(
+          findInputEl && document.activeElement === findInputEl
+        );
+        textareaEl.focus();
+        textareaEl.setSelectionRange(m.start, m.end);
+        if (keepFindFocus) {
+          findInputEl.focus({ preventScroll: true });
+        }
+      }
+      return;
+    }
+
+    if (mode === "read" && proseRegionEl) {
+      renderProseRegion();
+      const readEl = proseRegionEl.querySelector(".entry-reading-prose");
+      if (!readEl) return;
+      const textNodes = [];
+      const walk = (node) => {
+        for (const child of [...node.childNodes]) {
+          if (child.nodeType === 3) {
+            if (child.textContent && child.textContent.toLowerCase().includes(qLower)) {
+              textNodes.push(child);
+            }
+          } else if (child.nodeType === 1 && child.tagName !== "SCRIPT" && child.tagName !== "STYLE") {
+            walk(child);
+          }
+        }
+      };
+      walk(readEl);
+
+      for (const tn of textNodes) {
+        const raw = tn.textContent;
+        const lower = raw.toLowerCase();
+        const frag = document.createDocumentFragment();
+        let last = 0;
+        let pos = 0;
+        while ((pos = lower.indexOf(qLower, last)) !== -1) {
+          if (pos > last) {
+            frag.appendChild(document.createTextNode(raw.slice(last, pos)));
+          }
+          const mk = document.createElement("mark");
+          mk.className = "entry-find-match";
+          mk.textContent = raw.slice(pos, pos + q.length);
+          frag.appendChild(mk);
+          findMatches.push(mk);
+          last = pos + q.length;
+        }
+        if (last < raw.length) {
+          frag.appendChild(document.createTextNode(raw.slice(last)));
+        }
+        if (tn.parentNode) {
+          if (typeof tn.parentNode.replaceChild === "function") {
+            tn.parentNode.replaceChild(frag, tn);
+          } else {
+            const idx = tn.parentNode.childNodes.indexOf(tn);
+            if (idx >= 0) {
+              const inserted = [...frag.childNodes];
+              for (const n of inserted) n.parentNode = tn.parentNode;
+              tn.parentNode.childNodes.splice(idx, 1, ...inserted);
+              tn.parentNode = null;
+            }
+          }
+        }
+      }
+
+      if (findMatches.length === 0) {
+        findIndex = 0;
+        if (countEl) countEl.textContent = "0 matches";
+        return;
+      }
+      findIndex = ((findIndex % findMatches.length) + findMatches.length) % findMatches.length;
+      findMatches.forEach((mk, i) => {
+        mk.classList.toggle("is-active", i === findIndex);
+      });
+      if (countEl) countEl.textContent = `${findIndex + 1} / ${findMatches.length}`;
+      findMatches[findIndex]?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    }
+  };
+
+  const closeFindBar = (focusMatchInEditor = false) => {
+    const activeMatch =
+      focusMatchInEditor && mode === "write" && findMatches.length > 0
+        ? findMatches[findIndex]
+        : null;
+    findOpen = false;
+    findBarSlot.hidden = true;
+    findBarSlot.innerHTML = "";
+    findMatches = [];
+    clearReadModeHighlights();
+    if (activeMatch && textareaEl) {
+      textareaEl.focus();
+      textareaEl.setSelectionRange(activeMatch.start, activeMatch.end);
+    }
+  };
+
+  const renderFindBar = () => {
+    if (!findOpen) {
+      findBarSlot.hidden = true;
+      findBarSlot.innerHTML = "";
+      return;
+    }
+    findBarSlot.hidden = false;
+    findBarSlot.innerHTML = "";
+
+    const bar = document.createElement("div");
+    bar.className = "entry-find-bar";
+    bar.appendChild(iconNode("search", "tiny-icon"));
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "entry-find-input";
+    input.placeholder = "Find in entry…";
+    input.value = findQuery;
+    input.setAttribute("aria-label", "Find in entry");
+
+    const countEl = document.createElement("span");
+    countEl.className = "entry-find-count small-caps-meta";
+
+    const stepMatch = (delta) => {
+      if (!findQuery.trim()) return;
+      findIndex += delta;
+      applyFindHighlights(true);
+    };
+
+    const prevM = document.createElement("button");
+    prevM.type = "button";
+    prevM.className = "topbar-icon-btn";
+    prevM.title = "Previous match (Shift+Enter)";
+    prevM.setAttribute("aria-label", "Previous match");
+    prevM.appendChild(iconNode("chevronLeft", "tiny-icon"));
+    prevM.addEventListener("click", () => stepMatch(-1));
+
+    const nextM = document.createElement("button");
+    nextM.type = "button";
+    nextM.className = "topbar-icon-btn";
+    nextM.title = "Next match (Enter)";
+    nextM.setAttribute("aria-label", "Next match");
+    nextM.appendChild(iconNode("chevronRight", "tiny-icon"));
+    nextM.addEventListener("click", () => stepMatch(1));
+
+    const closeM = document.createElement("button");
+    closeM.type = "button";
+    closeM.className = "topbar-icon-btn";
+    closeM.title = "Close find bar (Esc)";
+    closeM.setAttribute("aria-label", "Close find bar");
+    closeM.appendChild(iconNode("close", "tiny-icon"));
+    closeM.addEventListener("click", closeFindBar);
+
+    input.addEventListener("input", () => {
+      findQuery = input.value;
+      findIndex = 0;
+      applyFindHighlights(false);
+    });
+    input.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        stepMatch(ev.shiftKey ? -1 : 1);
+      } else if (ev.key === "Escape") {
+        ev.preventDefault();
+        closeFindBar(true);
+      }
+    });
+
+    bar.append(input, countEl, prevM, nextM, closeM);
+    findBarSlot.appendChild(bar);
+    applyFindHighlights(false);
+    queueMicrotask(() => {
+      input.focus();
+      if (input.value && typeof input.select === "function") input.select();
+    });
+  };
 
   const renderTopbar = () => {
     topbar.innerHTML = "";
     const left = document.createElement("div");
     left.className = "entry-topbar-left";
 
-    const list = state.filteredEntries ?? state.entries ?? [];
-    const currentIdx = draft.id
-      ? list.findIndex((e) => e.id === draft.id)
-      : -1;
-    const prevEntry =
-      currentIdx >= 0 && currentIdx + 1 < list.length
-        ? list[currentIdx + 1]
-        : null;
-    const nextEntry = currentIdx > 0 ? list[currentIdx - 1] : null;
+    updateAdjacentNavState();
 
-    const prevBtn = document.createElement("button");
-    prevBtn.type = "button";
-    prevBtn.className = "topbar-ghost-btn";
-    prevBtn.disabled = !prevEntry;
-    prevBtn.title = "Previous entry";
-    prevBtn.appendChild(iconNode("chevronLeft", "tiny-icon"));
-    prevBtn.appendChild(document.createTextNode("Prev"));
-    prevBtn.addEventListener("click", () => {
-      if (prevEntry) callbacks.onOpenEntry?.(prevEntry.id, "prev");
+    prevBtnEl = document.createElement("button");
+    prevBtnEl.type = "button";
+    prevBtnEl.className = "topbar-ghost-btn";
+    prevBtnEl.disabled = !prevEntryRef;
+    prevBtnEl.title = "Previous entry";
+    prevBtnEl.appendChild(iconNode("chevronLeft", "tiny-icon"));
+    prevBtnEl.appendChild(document.createTextNode("Prev"));
+    prevBtnEl.addEventListener("click", () => {
+      if (prevEntryRef) callbacks.onOpenEntry?.(prevEntryRef.id, "prev");
     });
 
-    const nextBtn = document.createElement("button");
-    nextBtn.type = "button";
-    nextBtn.className = "topbar-ghost-btn";
-    nextBtn.disabled = !nextEntry;
-    nextBtn.title = "Next entry";
-    nextBtn.appendChild(document.createTextNode("Next"));
-    nextBtn.appendChild(iconNode("chevronRight", "tiny-icon"));
-    nextBtn.addEventListener("click", () => {
-      if (nextEntry) callbacks.onOpenEntry?.(nextEntry.id, "next");
+    nextBtnEl = document.createElement("button");
+    nextBtnEl.type = "button";
+    nextBtnEl.className = "topbar-ghost-btn";
+    nextBtnEl.disabled = !nextEntryRef;
+    nextBtnEl.title = "Next entry";
+    nextBtnEl.appendChild(document.createTextNode("Next"));
+    nextBtnEl.appendChild(iconNode("chevronRight", "tiny-icon"));
+    nextBtnEl.addEventListener("click", () => {
+      if (nextEntryRef) callbacks.onOpenEntry?.(nextEntryRef.id, "next");
     });
 
     const nbSelect = document.createElement("select");
@@ -691,7 +1071,7 @@ export function renderEntryEditor(container, state, callbacks = {}) {
       markDirtyAndScheduleSave(true);
     });
 
-    left.append(prevBtn, nextBtn, nbSelect);
+    left.append(prevBtnEl, nextBtnEl, nbSelect);
 
     const right = document.createElement("div");
     right.className = "entry-topbar-right";
@@ -700,37 +1080,36 @@ export function renderEntryEditor(container, state, callbacks = {}) {
     saveIndicatorEl.className = "entry-save-indicator";
     updateSaveIndicator();
 
+    const setEditorMode = (nextMode) => {
+      if (mode === nextMode) return;
+      mode = nextMode;
+      datePopoverOpen = false;
+      weatherPopoverOpen = false;
+      coverPopoverOpen = false;
+      moreMenuOpen = false;
+      renderDatePopover();
+      renderWeatherPopover();
+      callbacks.onModeChange?.(mode);
+      renderTopbar();
+      renderTitleArea();
+      renderProseRegion();
+      syncStampOverlay();
+      if (findOpen) applyFindHighlights(false);
+    };
+
     const modeSwitch = document.createElement("div");
     modeSwitch.className = "entry-mode-switch";
     const writeBtn = document.createElement("button");
     writeBtn.type = "button";
     writeBtn.className = `mode-switch-btn${mode === "write" ? " is-active" : ""}`;
     writeBtn.textContent = "Write";
-    writeBtn.addEventListener("click", () => {
-      if (mode !== "write") {
-        mode = "write";
-        callbacks.onModeChange?.("write");
-        renderTopbar();
-        renderTitleArea();
-        renderProseRegion();
-        syncStampOverlay();
-      }
-    });
+    writeBtn.addEventListener("click", () => setEditorMode("write"));
 
     const readBtn = document.createElement("button");
     readBtn.type = "button";
     readBtn.className = `mode-switch-btn${mode === "read" ? " is-active" : ""}`;
     readBtn.textContent = "Read";
-    readBtn.addEventListener("click", () => {
-      if (mode !== "read") {
-        mode = "read";
-        callbacks.onModeChange?.("read");
-        renderTopbar();
-        renderTitleArea();
-        renderProseRegion();
-        syncStampOverlay();
-      }
-    });
+    readBtn.addEventListener("click", () => setEditorMode("read"));
     modeSwitch.append(writeBtn, readBtn);
 
     const starBtn = document.createElement("button");
@@ -749,16 +1128,29 @@ export function renderEntryEditor(container, state, callbacks = {}) {
 
     const coverBtn = document.createElement("button");
     coverBtn.type = "button";
-    coverBtn.className = `topbar-icon-btn${coverAsset ? " is-active" : ""}`;
+    coverBtn.className = `topbar-icon-btn${draft.cover_asset ? " is-active" : ""}`;
     coverBtn.title = "Watercolor cover wash";
     coverBtn.setAttribute("aria-label", "Watercolor cover wash");
     coverBtn.appendChild(iconNode("spark", "tiny-icon"));
     coverBtn.addEventListener("click", () => {
+      moreMenuOpen = false;
       coverPopoverOpen = !coverPopoverOpen;
       renderTopbar();
     });
 
-    right.append(saveIndicatorEl, modeSwitch, starBtn, coverBtn);
+    const moreBtn = document.createElement("button");
+    moreBtn.type = "button";
+    moreBtn.className = `topbar-icon-btn${moreMenuOpen ? " is-active" : ""}`;
+    moreBtn.title = "Entry actions (Export, Print, Duplicate, Save as Template)";
+    moreBtn.setAttribute("aria-label", "Entry actions");
+    moreBtn.appendChild(iconNode("moreHorizontal", "tiny-icon"));
+    moreBtn.addEventListener("click", () => {
+      coverPopoverOpen = false;
+      moreMenuOpen = !moreMenuOpen;
+      renderTopbar();
+    });
+
+    right.append(saveIndicatorEl, modeSwitch, starBtn, coverBtn, moreBtn);
 
     if (draft.id) {
       const divider = document.createElement("span");
@@ -800,13 +1192,13 @@ export function renderEntryEditor(container, state, callbacks = {}) {
           if (inFlightSave) {
             await inFlightSave.catch(() => {});
           }
-          if (draft.id) sessionEntryCovers.delete(draft.id);
           try {
             await callbacks.onDeleteEntry?.(draft.id);
           } catch (err) {
             disposed = false;
             deleteConfirmOpen = false;
             renderTopbar();
+            callbacks.onToast?.(err?.message || "Delete failed", "error");
             if (saveIndicatorEl) {
               saveIndicatorEl.classList.add("is-dirty");
               saveIndicatorEl.textContent = err?.message || "Delete failed";
@@ -828,9 +1220,9 @@ export function renderEntryEditor(container, state, callbacks = {}) {
 
     topbar.append(left, right);
 
-    if (coverPopoverAbort) {
-      coverPopoverAbort.abort();
-      coverPopoverAbort = null;
+    if (topbarPopoverAbort) {
+      topbarPopoverAbort.abort();
+      topbarPopoverAbort = null;
     }
 
     if (coverPopoverOpen) {
@@ -840,39 +1232,68 @@ export function renderEntryEditor(container, state, callbacks = {}) {
       for (const cov of covers) {
         const cBtn = document.createElement("button");
         cBtn.type = "button";
-        cBtn.className = "cover-mini-btn";
+        cBtn.className = `cover-mini-btn${
+          draft.cover_asset === cov.path ? " is-selected" : ""
+        }`;
         cBtn.title = cov.label || "Watercolor wash";
         const img = document.createElement("img");
-        img.src = cov.path;
+        img.src = resolveVaultUrl(cov.path);
         img.alt = cov.label || "Cover wash";
         cBtn.appendChild(img);
         cBtn.addEventListener("click", () => {
-          coverAsset = cov.path;
-          sessionEntryCovers.set(coverKey, coverAsset);
+          draft.cover_asset = cov.path;
           coverPopoverOpen = false;
           renderCoverBanner();
           renderTopbar();
+          markDirtyAndScheduleSave();
         });
         pop.appendChild(cBtn);
       }
-      if (coverAsset) {
-        const clearCoverBtn = document.createElement("button");
-        clearCoverBtn.type = "button";
-        clearCoverBtn.className = "topbar-ghost-btn";
-        clearCoverBtn.style.gridColumn = "1 / -1";
-        clearCoverBtn.textContent = "Remove cover";
-        clearCoverBtn.addEventListener("click", () => {
-          coverAsset = null;
-          sessionEntryCovers.delete(coverKey);
+
+      const uploadLabel = document.createElement("label");
+      uploadLabel.className = "topbar-ghost-btn cover-pop-full";
+      uploadLabel.appendChild(iconNode("image", "tiny-icon"));
+      uploadLabel.appendChild(document.createTextNode("Upload custom cover"));
+      const coverFileInput = document.createElement("input");
+      coverFileInput.type = "file";
+      coverFileInput.accept = "image/*";
+      coverFileInput.className = "sr-only";
+      coverFileInput.addEventListener("change", async () => {
+        const file = coverFileInput.files?.[0];
+        coverFileInput.value = "";
+        if (!file) return;
+        try {
+          const uploaded = await api.uploadPhoto(file, "Entry cover");
+          draft.cover_asset = uploaded.url;
           coverPopoverOpen = false;
           renderCoverBanner();
           renderTopbar();
+          markDirtyAndScheduleSave();
+          callbacks.onToast?.("Entry cover updated", "success");
+        } catch (err) {
+          callbacks.onToast?.(err?.message || "Cover upload failed", "error");
+        }
+      });
+      uploadLabel.appendChild(coverFileInput);
+      pop.appendChild(uploadLabel);
+
+      if (draft.cover_asset) {
+        const clearCoverBtn = document.createElement("button");
+        clearCoverBtn.type = "button";
+        clearCoverBtn.className = "topbar-ghost-btn cover-pop-full";
+        clearCoverBtn.textContent = "Remove cover";
+        clearCoverBtn.addEventListener("click", () => {
+          draft.cover_asset = null;
+          coverPopoverOpen = false;
+          renderCoverBanner();
+          renderTopbar();
+          markDirtyAndScheduleSave();
         });
         pop.appendChild(clearCoverBtn);
       }
       topbar.appendChild(pop);
 
-      coverPopoverAbort = new AbortController();
+      topbarPopoverAbort = new AbortController();
       const closePop = () => {
         coverPopoverOpen = false;
         renderTopbar();
@@ -884,29 +1305,258 @@ export function renderEntryEditor(container, state, callbacks = {}) {
             closePop();
           }
         },
-        { signal: coverPopoverAbort.signal }
+        { signal: topbarPopoverAbort.signal }
       );
       window.addEventListener(
         "keydown",
         (ev) => {
           if (ev.key === "Escape") closePop();
         },
-        { signal: coverPopoverAbort.signal }
+        { signal: topbarPopoverAbort.signal }
+      );
+    } else if (moreMenuOpen) {
+      const menu = document.createElement("div");
+      menu.className = "entry-more-popover";
+
+      const menuItems = [
+        {
+          label: "Copy Markdown",
+          ic: "copy",
+          run: async () => {
+            const md = buildExportMarkdown(draft);
+            try {
+              await navigator.clipboard.writeText(md);
+              callbacks.onToast?.("Markdown copied to clipboard", "success");
+            } catch {
+              callbacks.onToast?.("Clipboard unavailable", "error");
+            }
+          },
+        },
+        {
+          label: "Export .md file",
+          ic: "download",
+          run: () => {
+            const md = buildExportMarkdown(draft);
+            const ymd = toLocalDateInputValue(draft.date);
+            const titleSlug = (draft.titleInput.trim() || "journal-entry")
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, "-")
+              .replace(/^-+|-+$/g, "")
+              .slice(0, 48) || "entry";
+            downloadTextFile(`${ymd}-${titleSlug}.md`, md);
+            callbacks.onToast?.("Markdown file exported", "success");
+          },
+        },
+        {
+          label: "Print / Save PDF",
+          ic: "printer",
+          run: () => {
+            window.print();
+          },
+        },
+        {
+          label: "Duplicate entry",
+          ic: "bookmark",
+          run: () => {
+            callbacks.onDuplicateEntry?.({
+              title: draft.titleInput ? `${draft.titleInput} (Copy)` : "",
+              notebook_id: draft.notebook_id,
+              tags: [...draft.tags],
+              mood: draft.mood,
+              weather: draft.weather ? { ...draft.weather } : null,
+              location: draft.location ? { ...draft.location } : null,
+              cover_asset: draft.cover_asset,
+              body: draft.body,
+            });
+          },
+        },
+        {
+          label: "Save as Template",
+          ic: "feather",
+          run: () => {
+            if (mode !== "write") {
+              mode = "write";
+              callbacks.onModeChange?.("write");
+              renderTitleArea();
+              renderProseRegion();
+              syncStampOverlay();
+            }
+            activeInlineTool = "save_template";
+            renderInlineTool();
+            inlineToolContainer.scrollIntoView({ behavior: "smooth", block: "nearest" });
+          },
+        },
+      ];
+
+      for (const item of menuItems) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "entry-more-item";
+        btn.appendChild(iconNode(item.ic, "tiny-icon"));
+        btn.appendChild(document.createTextNode(item.label));
+        btn.addEventListener("click", () => {
+          moreMenuOpen = false;
+          renderTopbar();
+          item.run();
+        });
+        menu.appendChild(btn);
+      }
+
+      topbar.appendChild(menu);
+
+      topbarPopoverAbort = new AbortController();
+      const closeMenu = () => {
+        moreMenuOpen = false;
+        renderTopbar();
+      };
+      document.addEventListener(
+        "pointerdown",
+        (ev) => {
+          if (!menu.contains(ev.target) && !moreBtn.contains(ev.target)) {
+            closeMenu();
+          }
+        },
+        { signal: topbarPopoverAbort.signal }
+      );
+      window.addEventListener(
+        "keydown",
+        (ev) => {
+          if (ev.key === "Escape") closeMenu();
+        },
+        { signal: topbarPopoverAbort.signal }
       );
     }
   };
 
-  // 2. Entry Header (Dateline, Optional Title, Inline Metadata)
+  // 2. Entry Header (Dateline with Date/Time Picker, Optional Title, Inline Metadata)
   const header = document.createElement("header");
   header.className = "entry-header";
   column.appendChild(header);
 
   const dateline = document.createElement("div");
   dateline.className = "entry-dateline";
+
+  const datelineBtn = document.createElement("button");
+  datelineBtn.type = "button";
+  datelineBtn.className = "entry-dateline-btn";
+  datelineBtn.title = "Change entry date or time";
   datelineTextEl = document.createElement("span");
   datelineTextEl.className = "small-caps-meta";
   datelineTextEl.textContent = formatEntryDateLine(draft.date, draft.body);
-  dateline.appendChild(datelineTextEl);
+  datelineBtn.append(datelineTextEl, iconNode("calendar", "tiny-icon dateline-edit-icon"));
+  dateline.appendChild(datelineBtn);
+
+  const datePopoverSlot = document.createElement("div");
+  datePopoverSlot.className = "inline-popover-anchor";
+
+  const renderDatePopover = () => {
+    if (datePopoverAbort) {
+      datePopoverAbort.abort();
+      datePopoverAbort = null;
+    }
+    datePopoverSlot.innerHTML = "";
+    if (!datePopoverOpen) return;
+
+    const pop = document.createElement("form");
+    pop.className = "entry-date-popover";
+
+    const head = document.createElement("div");
+    head.className = "inline-picker-header";
+    const lbl = document.createElement("span");
+    lbl.className = "small-caps-meta";
+    lbl.textContent = "Entry Date & Time";
+    head.appendChild(lbl);
+    pop.appendChild(head);
+
+    const row = document.createElement("div");
+    row.className = "date-popover-inputs";
+    const dateInput = document.createElement("input");
+    dateInput.type = "date";
+    dateInput.className = "editorial-input";
+    dateInput.value = toLocalDateInputValue(draft.date);
+    dateInput.required = true;
+
+    const timeInput = document.createElement("input");
+    timeInput.type = "time";
+    timeInput.className = "editorial-input";
+    timeInput.value = toLocalTimeInputValue(draft.date);
+    timeInput.required = true;
+    row.append(dateInput, timeInput);
+    pop.appendChild(row);
+
+    const actions = document.createElement("div");
+    actions.className = "date-popover-actions";
+    const applyBtn = document.createElement("button");
+    applyBtn.type = "submit";
+    applyBtn.className = "btn-editorial btn-sage small";
+    applyBtn.textContent = "Apply";
+
+    const nowBtn = document.createElement("button");
+    nowBtn.type = "button";
+    nowBtn.className = "btn-editorial btn-ghost small";
+    nowBtn.textContent = "Set to now";
+    nowBtn.addEventListener("click", () => {
+      draft.date = new Date().toISOString();
+      datePopoverOpen = false;
+      renderDatePopover();
+      updateDatelineAndLedger(true);
+      markDirtyAndScheduleSave(true);
+    });
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "btn-editorial btn-ghost small";
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.addEventListener("click", () => {
+      datePopoverOpen = false;
+      renderDatePopover();
+    });
+
+    actions.append(applyBtn, nowBtn, cancelBtn);
+    pop.appendChild(actions);
+
+    pop.addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      if (!dateInput.value) return;
+      const t = timeInput.value || "12:00";
+      const parsed = new Date(`${dateInput.value}T${t}:00`);
+      if (!Number.isNaN(parsed.getTime())) {
+        draft.date = parsed.toISOString();
+        datePopoverOpen = false;
+        renderDatePopover();
+        updateDatelineAndLedger(true);
+        markDirtyAndScheduleSave(true);
+      }
+    });
+
+    datePopoverSlot.appendChild(pop);
+    datePopoverAbort = new AbortController();
+    document.addEventListener(
+      "pointerdown",
+      (ev) => {
+        if (!pop.contains(ev.target) && !datelineBtn.contains(ev.target)) {
+          datePopoverOpen = false;
+          renderDatePopover();
+        }
+      },
+      { signal: datePopoverAbort.signal }
+    );
+    window.addEventListener(
+      "keydown",
+      (ev) => {
+        if (ev.key === "Escape") {
+          datePopoverOpen = false;
+          renderDatePopover();
+        }
+      },
+      { signal: datePopoverAbort.signal }
+    );
+  };
+
+  datelineBtn.addEventListener("click", () => {
+    datePopoverOpen = !datePopoverOpen;
+    renderDatePopover();
+  });
 
   const otdTotal =
     state.onThisDayCount ??
@@ -922,7 +1572,7 @@ export function renderEntryEditor(container, state, callbacks = {}) {
     otdBtn.addEventListener("click", () => callbacks.onNavigate?.("on_this_day"));
     dateline.appendChild(otdBtn);
   }
-  header.appendChild(dateline);
+  header.append(dateline, datePopoverSlot);
 
   titleWrapEl = document.createElement("div");
   header.appendChild(titleWrapEl);
@@ -942,6 +1592,12 @@ export function renderEntryEditor(container, state, callbacks = {}) {
         }
         markDirtyAndScheduleSave();
       });
+      input.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          textareaEl?.focus();
+        }
+      });
       titleWrapEl.appendChild(input);
     } else {
       const showTitle =
@@ -958,7 +1614,167 @@ export function renderEntryEditor(container, state, callbacks = {}) {
 
   metaInlineEl = document.createElement("div");
   metaInlineEl.className = "entry-meta-inline";
-  header.appendChild(metaInlineEl);
+  const weatherPopoverSlot = document.createElement("div");
+  weatherPopoverSlot.className = "inline-popover-anchor";
+  header.append(metaInlineEl, weatherPopoverSlot);
+
+  const renderWeatherPopover = () => {
+    if (weatherPopoverAbort) {
+      weatherPopoverAbort.abort();
+      weatherPopoverAbort = null;
+    }
+    weatherPopoverSlot.innerHTML = "";
+    if (!weatherPopoverOpen) return;
+
+    const hint = state.dailyContext?.weather_hint;
+    let selectedIcon = draft.weather?.icon_key || hint?.icon_key || "sun";
+    let conditionVal = draft.weather?.condition || hint?.condition || "Clear";
+    let tempVal =
+      typeof draft.weather?.temperature_c === "number"
+        ? String(Math.round(draft.weather.temperature_c))
+        : typeof hint?.temperature_c === "number"
+          ? String(Math.round(hint.temperature_c))
+          : "";
+
+    const pop = document.createElement("form");
+    pop.className = "entry-weather-popover";
+
+    const head = document.createElement("div");
+    head.className = "inline-picker-header";
+    const lbl = document.createElement("span");
+    lbl.className = "small-caps-meta";
+    lbl.textContent = "Weather Conditions";
+    head.appendChild(lbl);
+    pop.appendChild(head);
+
+    const presets = document.createElement("div");
+    presets.className = "weather-presets-grid";
+
+    const condInput = document.createElement("input");
+    condInput.type = "text";
+    condInput.className = "editorial-input";
+    condInput.placeholder = "Condition (e.g. Light Rain)";
+    condInput.value = conditionVal;
+
+    const tempInput = document.createElement("input");
+    tempInput.type = "number";
+    tempInput.step = "1";
+    tempInput.className = "editorial-input weather-temp-input";
+    tempInput.placeholder = "°C";
+    tempInput.value = tempVal;
+
+    const renderPresetBtns = () => {
+      presets.innerHTML = "";
+      for (const p of WEATHER_PRESETS) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = `weather-preset-btn${
+          conditionVal.toLowerCase() === p.condition.toLowerCase() ? " is-active" : ""
+        }`;
+        b.append(weatherIconNode(p.icon_key, "tiny-icon"), document.createTextNode(p.condition));
+        b.addEventListener("click", () => {
+          conditionVal = p.condition;
+          selectedIcon = p.icon_key;
+          condInput.value = p.condition;
+          renderPresetBtns();
+        });
+        presets.appendChild(b);
+      }
+    };
+    renderPresetBtns();
+    pop.appendChild(presets);
+
+    condInput.addEventListener("input", () => {
+      conditionVal = condInput.value;
+    });
+
+    const fieldsRow = document.createElement("div");
+    fieldsRow.className = "weather-fields-row";
+    fieldsRow.append(condInput, tempInput);
+    pop.appendChild(fieldsRow);
+
+    const actions = document.createElement("div");
+    actions.className = "date-popover-actions";
+    const applyBtn = document.createElement("button");
+    applyBtn.type = "submit";
+    applyBtn.className = "btn-editorial btn-sage small";
+    applyBtn.textContent = "Save";
+
+    actions.appendChild(applyBtn);
+
+    if (draft.weather) {
+      const clearBtn = document.createElement("button");
+      clearBtn.type = "button";
+      clearBtn.className = "btn-editorial btn-ghost small is-danger";
+      clearBtn.textContent = "Clear";
+      clearBtn.addEventListener("click", () => {
+        draft.weather = null;
+        weatherPopoverOpen = false;
+        renderWeatherPopover();
+        renderMetaInline();
+        markDirtyAndScheduleSave();
+      });
+      actions.appendChild(clearBtn);
+    }
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "btn-editorial btn-ghost small";
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.addEventListener("click", () => {
+      weatherPopoverOpen = false;
+      renderWeatherPopover();
+    });
+    actions.appendChild(cancelBtn);
+    pop.appendChild(actions);
+
+    pop.addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      const cond = condInput.value.trim();
+      if (!cond) {
+        draft.weather = null;
+      } else {
+        const parsedTemp =
+          tempInput.value.trim() !== "" && Number.isFinite(Number(tempInput.value))
+            ? Number(tempInput.value)
+            : null;
+        draft.weather = {
+          condition: cond,
+          temperature_c: parsedTemp,
+          icon_key: selectedIcon || "cloud",
+          humidity_pct: draft.weather?.humidity_pct ?? null,
+          summary: cond,
+        };
+      }
+      weatherPopoverOpen = false;
+      renderWeatherPopover();
+      renderMetaInline();
+      markDirtyAndScheduleSave();
+    });
+
+    weatherPopoverSlot.appendChild(pop);
+    weatherPopoverAbort = new AbortController();
+    document.addEventListener(
+      "pointerdown",
+      (ev) => {
+        if (!pop.contains(ev.target) && !metaInlineEl.contains(ev.target)) {
+          weatherPopoverOpen = false;
+          renderWeatherPopover();
+        }
+      },
+      { signal: weatherPopoverAbort.signal }
+    );
+    window.addEventListener(
+      "keydown",
+      (ev) => {
+        if (ev.key === "Escape") {
+          weatherPopoverOpen = false;
+          renderWeatherPopover();
+        }
+      },
+      { signal: weatherPopoverAbort.signal }
+    );
+  };
 
   const renderMetaInline = () => {
     metaInlineEl.innerHTML = "";
@@ -1046,11 +1862,10 @@ export function renderEntryEditor(container, state, callbacks = {}) {
           ? ` · ${Math.round(draft.weather.temperature_c)}°C`
           : "";
       wxBtn.textContent = `${draft.weather.condition}${tempPart}`;
-      wxBtn.title = "Click to clear weather";
+      wxBtn.title = "Edit or clear weather";
       wxBtn.addEventListener("click", () => {
-        draft.weather = null;
-        renderMetaInline();
-        markDirtyAndScheduleSave();
+        weatherPopoverOpen = !weatherPopoverOpen;
+        renderWeatherPopover();
       });
       wxWrap.appendChild(wxBtn);
     } else {
@@ -1059,19 +1874,10 @@ export function renderEntryEditor(container, state, callbacks = {}) {
       addWxBtn.type = "button";
       addWxBtn.className = "meta-inline-btn";
       addWxBtn.textContent = "+ Weather";
+      addWxBtn.title = "Add weather conditions";
       addWxBtn.addEventListener("click", () => {
-        const hint = state.dailyContext?.weather_hint;
-        draft.weather = hint
-          ? { ...hint }
-          : {
-              condition: "Clear",
-              temperature_c: 21,
-              icon_key: "sun",
-              humidity_pct: null,
-              summary: "Clear sky",
-            };
-        renderMetaInline();
-        markDirtyAndScheduleSave();
+        weatherPopoverOpen = !weatherPopoverOpen;
+        renderWeatherPopover();
       });
       wxWrap.appendChild(addWxBtn);
     }
@@ -1461,7 +2267,9 @@ export function renderEntryEditor(container, state, callbacks = {}) {
     heading.textContent =
       activeInlineTool === "template"
         ? "Apply Editorial Template"
-        : "Link Past Entry";
+        : activeInlineTool === "save_template"
+          ? "Save Entry as Reusable Template"
+          : "Link Past Entry";
     const closeBtn = document.createElement("button");
     closeBtn.type = "button";
     closeBtn.className = "topbar-icon-btn";
@@ -1473,10 +2281,84 @@ export function renderEntryEditor(container, state, callbacks = {}) {
     head.append(heading, closeBtn);
     card.appendChild(head);
 
-    if (activeInlineTool === "template") {
+    if (activeInlineTool === "save_template") {
+      const form = document.createElement("form");
+      form.className = "save-template-form";
+
+      const nameInput = document.createElement("input");
+      nameInput.type = "text";
+      nameInput.className = "editorial-input";
+      nameInput.placeholder = "Template name (e.g. Weekly Review)";
+      nameInput.value = draft.titleInput.trim() || "";
+      nameInput.required = true;
+
+      const descInput = document.createElement("input");
+      descInput.type = "text";
+      descInput.className = "editorial-input";
+      descInput.placeholder = "Short description (optional)";
+
+      const catInput = document.createElement("input");
+      catInput.type = "text";
+      catInput.className = "editorial-input";
+      catInput.placeholder = "Category (e.g. Daily, Review, Travel)";
+      catInput.value = "Custom";
+
+      const errEl = document.createElement("p");
+      errEl.className = "form-error";
+      errEl.hidden = true;
+
+      const actionsRow = document.createElement("div");
+      actionsRow.className = "date-popover-actions";
+      const submitBtn = document.createElement("button");
+      submitBtn.type = "submit";
+      submitBtn.className = "btn-editorial btn-sage small";
+      submitBtn.textContent = "Save Template";
+      const cancelBtn = document.createElement("button");
+      cancelBtn.type = "button";
+      cancelBtn.className = "btn-editorial btn-ghost small";
+      cancelBtn.textContent = "Cancel";
+      cancelBtn.addEventListener("click", () => {
+        activeInlineTool = null;
+        renderInlineTool();
+      });
+      actionsRow.append(submitBtn, cancelBtn);
+
+      form.append(nameInput, descInput, catInput, errEl, actionsRow);
+      form.addEventListener("submit", async (ev) => {
+        ev.preventDefault();
+        const nm = nameInput.value.trim();
+        if (!nm) return;
+        errEl.hidden = true;
+        submitBtn.disabled = true;
+        submitBtn.textContent = "Saving...";
+        try {
+          await callbacks.onSaveTemplate?.({
+            name: nm,
+            description: descInput.value.trim() || null,
+            category: catInput.value.trim() || "Custom",
+            default_tags: [...draft.tags],
+            default_mood: draft.mood || null,
+            body_markdown: draft.body || "",
+            prompts: [],
+          });
+          activeInlineTool = null;
+          renderInlineTool();
+        } catch (err) {
+          errEl.textContent = err?.message || "Failed to save template";
+          errEl.hidden = false;
+          submitBtn.disabled = false;
+          submitBtn.textContent = "Save Template";
+        }
+      });
+      card.appendChild(form);
+      queueMicrotask(() => nameInput.focus());
+    } else if (activeInlineTool === "template") {
       const grid = document.createElement("div");
       grid.className = "template-picker-grid";
       for (const tpl of state.templates || []) {
+        const cardWrap = document.createElement("div");
+        cardWrap.className = "template-choice-wrap";
+
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "template-choice-card";
@@ -1511,9 +2393,44 @@ export function renderEntryEditor(container, state, callbacks = {}) {
           activeInlineTool = null;
           renderInlineTool();
         });
-        grid.appendChild(btn);
+        cardWrap.appendChild(btn);
+
+        if (!STARTER_TEMPLATE_IDS.has(tpl.id) && callbacks.onDeleteTemplate) {
+          const delTplBtn = document.createElement("button");
+          delTplBtn.type = "button";
+          delTplBtn.className = "template-delete-btn";
+          delTplBtn.title = `Delete "${tpl.name}" template`;
+          delTplBtn.setAttribute("aria-label", `Delete ${tpl.name}`);
+          delTplBtn.appendChild(iconNode("trash", "tiny-icon"));
+          delTplBtn.addEventListener("click", async (ev) => {
+            ev.stopPropagation();
+            await callbacks.onDeleteTemplate?.(tpl.id);
+            renderInlineTool();
+          });
+          cardWrap.appendChild(delTplBtn);
+        }
+
+        grid.appendChild(cardWrap);
       }
       card.appendChild(grid);
+
+      if (callbacks.onSaveTemplate) {
+        const footerRow = document.createElement("div");
+        footerRow.className = "template-picker-footer";
+        const saveCurBtn = document.createElement("button");
+        saveCurBtn.type = "button";
+        saveCurBtn.className = "btn-editorial btn-ghost small";
+        saveCurBtn.append(
+          iconNode("plus", "tiny-icon"),
+          document.createTextNode("Save current entry as template")
+        );
+        saveCurBtn.addEventListener("click", () => {
+          activeInlineTool = "save_template";
+          renderInlineTool();
+        });
+        footerRow.appendChild(saveCurBtn);
+        card.appendChild(footerRow);
+      }
     } else if (activeInlineTool === "link") {
       const searchInput = document.createElement("input");
       searchInput.type = "text";
@@ -1683,30 +2600,250 @@ export function renderEntryEditor(container, state, callbacks = {}) {
         markDirtyAndScheduleSave();
       });
 
+      const wrapSelection = (before, after = before, placeholder = "text") => {
+        if (!textareaEl) return;
+        const start = textareaEl.selectionStart ?? 0;
+        const end = textareaEl.selectionEnd ?? start;
+        const val = textareaEl.value;
+        const selected = val.slice(start, end);
+
+        // Unwrap if already wrapped with identical markers
+        if (
+          start >= before.length &&
+          val.slice(start - before.length, start) === before &&
+          val.slice(end, end + after.length) === after
+        ) {
+          const next =
+            val.slice(0, start - before.length) +
+            selected +
+            val.slice(end + after.length);
+          draft.body = next;
+          textareaEl.value = next;
+          textareaEl.setSelectionRange(start - before.length, end - before.length);
+          resizeTextareaForEdit(textareaEl, true);
+          markDirtyAndScheduleSave();
+          return;
+        }
+
+        const inner = selected || placeholder;
+        const next = val.slice(0, start) + before + inner + after + val.slice(end);
+        draft.body = next;
+        textareaEl.value = next;
+        textareaEl.setSelectionRange(
+          start + before.length,
+          start + before.length + inner.length
+        );
+        resizeTextareaForEdit(textareaEl, true);
+        renderBlankPrompt();
+        markDirtyAndScheduleSave();
+      };
+
       textareaEl.addEventListener("keydown", (ev) => {
-        if (!slashState) return;
-        const items = getFilteredSlashItems();
-        if (ev.key === "ArrowDown") {
-          ev.preventDefault();
-          if (items.length > 0) {
-            slashState.selectedIndex =
-              (slashState.selectedIndex + 1) % items.length;
-            renderSlashPalette();
+        if (slashState) {
+          const items = getFilteredSlashItems();
+          if (ev.key === "ArrowDown") {
+            ev.preventDefault();
+            if (items.length > 0) {
+              slashState.selectedIndex =
+                (slashState.selectedIndex + 1) % items.length;
+              renderSlashPalette();
+            }
+            return;
           }
-        } else if (ev.key === "ArrowUp") {
-          ev.preventDefault();
-          if (items.length > 0) {
-            slashState.selectedIndex =
-              (slashState.selectedIndex - 1 + items.length) % items.length;
-            renderSlashPalette();
+          if (ev.key === "ArrowUp") {
+            ev.preventDefault();
+            if (items.length > 0) {
+              slashState.selectedIndex =
+                (slashState.selectedIndex - 1 + items.length) % items.length;
+              renderSlashPalette();
+            }
+            return;
           }
-        } else if (ev.key === "Enter" && items.length > 0) {
+          if (ev.key === "Enter" && items.length > 0) {
+            ev.preventDefault();
+            applySlashCommand(items[slashState.selectedIndex] || items[0]);
+            return;
+          }
+          if (ev.key === "Escape") {
+            ev.preventDefault();
+            slashState = null;
+            renderSlashPalette();
+            return;
+          }
+        }
+
+        const mod = ev.ctrlKey || ev.metaKey;
+        if (mod && !ev.altKey) {
+          const key = ev.key.toLowerCase();
+          if (key === "b" && !ev.shiftKey) {
+            ev.preventDefault();
+            wrapSelection("**", "**", "bold text");
+            return;
+          }
+          if (key === "i" && !ev.shiftKey) {
+            ev.preventDefault();
+            wrapSelection("*", "*", "italic text");
+            return;
+          }
+          if (key === "x" && ev.shiftKey) {
+            ev.preventDefault();
+            wrapSelection("~~", "~~", "strikethrough");
+            return;
+          }
+          if (key === "c" && ev.shiftKey) {
+            ev.preventDefault();
+            wrapSelection("`", "`", "code");
+            return;
+          }
+          if (key === "l" && ev.shiftKey) {
+            ev.preventDefault();
+            wrapSelection("[", "](https://)", "link text");
+            return;
+          }
+          if (key === "t" && ev.shiftKey) {
+            ev.preventDefault();
+            const pos = textareaEl.selectionStart ?? 0;
+            const val = textareaEl.value;
+            const lineStart = val.lastIndexOf("\n", pos - 1) + 1;
+            const lineEndIdx = val.indexOf("\n", pos);
+            const lineEnd = lineEndIdx === -1 ? val.length : lineEndIdx;
+            const line = val.slice(lineStart, lineEnd);
+            let nextLine = line;
+            let delta = 0;
+            if (/^(\s*[-*]\s+)\[ \]\s?/.test(line)) {
+              nextLine = line.replace(/^(\s*[-*]\s+)\[ \]/, "$1[x]");
+            } else if (/^(\s*[-*]\s+)\[[xX]\]\s?/.test(line)) {
+              nextLine = line.replace(/^(\s*[-*]\s+)\[[xX]\]\s?/, "");
+              delta = nextLine.length - line.length;
+            } else {
+              nextLine = `- [ ] ${line}`;
+              delta = 6;
+            }
+            const nextVal = val.slice(0, lineStart) + nextLine + val.slice(lineEnd);
+            draft.body = nextVal;
+            textareaEl.value = nextVal;
+            const nextPos = Math.max(lineStart, pos + delta);
+            textareaEl.setSelectionRange(nextPos, nextPos);
+            resizeTextareaForEdit(textareaEl, true);
+            markDirtyAndScheduleSave();
+            return;
+          }
+        }
+
+        // Smart Tab / Shift+Tab indentation inside prose
+        if (ev.key === "Tab") {
           ev.preventDefault();
-          applySlashCommand(items[slashState.selectedIndex] || items[0]);
-        } else if (ev.key === "Escape") {
-          ev.preventDefault();
-          slashState = null;
-          renderSlashPalette();
+          const start = textareaEl.selectionStart ?? 0;
+          const end = textareaEl.selectionEnd ?? start;
+          const val = textareaEl.value;
+          if (start === end && !ev.shiftKey) {
+            insertTextIntoBody("  ", start, end);
+            return;
+          }
+          const lineStart = val.lastIndexOf("\n", start - 1) + 1;
+          const selectedBlock = val.slice(lineStart, end);
+          const lines = selectedBlock.split("\n");
+          let firstDelta = 0;
+          let totalDelta = 0;
+          const updated = lines.map((ln, idx) => {
+            if (ev.shiftKey) {
+              const m = /^( {1,2}|\t)/.exec(ln);
+              if (m) {
+                if (idx === 0) firstDelta = -m[1].length;
+                totalDelta -= m[1].length;
+                return ln.slice(m[1].length);
+              }
+              return ln;
+            }
+            if (idx === 0) firstDelta = 2;
+            totalDelta += 2;
+            return `  ${ln}`;
+          });
+          const nextVal = val.slice(0, lineStart) + updated.join("\n") + val.slice(end);
+          draft.body = nextVal;
+          textareaEl.value = nextVal;
+          textareaEl.setSelectionRange(
+            Math.max(lineStart, start + firstDelta),
+            Math.max(lineStart, end + totalDelta)
+          );
+          resizeTextareaForEdit(textareaEl, true);
+          markDirtyAndScheduleSave();
+          return;
+        }
+
+        // Smart Enter continuation for checklists, bullet lists, numbered lists, and quotes
+        if (ev.key === "Enter" && !ev.shiftKey && !mod && !ev.altKey) {
+          const start = textareaEl.selectionStart ?? 0;
+          const end = textareaEl.selectionEnd ?? start;
+          if (start !== end) return;
+          const val = textareaEl.value;
+          const lineStart = val.lastIndexOf("\n", start - 1) + 1;
+          const beforeCaret = val.slice(lineStart, start);
+
+          const todoMatch = /^(\s*)([-*])\s+\[([ xX])\]\s+(.*)$/.exec(beforeCaret);
+          if (todoMatch) {
+            ev.preventDefault();
+            if (!todoMatch[4].trim()) {
+              // Empty checklist item -> exit list cleanly
+              const nextVal = val.slice(0, lineStart) + val.slice(start);
+              draft.body = nextVal;
+              textareaEl.value = nextVal;
+              textareaEl.setSelectionRange(lineStart, lineStart);
+              resizeTextareaForEdit(textareaEl, true);
+              markDirtyAndScheduleSave();
+            } else {
+              insertTextIntoBody(`\n${todoMatch[1]}${todoMatch[2]} [ ] `, start, start);
+            }
+            return;
+          }
+
+          const bulletMatch = /^(\s*)([-*])\s+(.*)$/.exec(beforeCaret);
+          if (bulletMatch) {
+            ev.preventDefault();
+            if (!bulletMatch[3].trim()) {
+              const nextVal = val.slice(0, lineStart) + val.slice(start);
+              draft.body = nextVal;
+              textareaEl.value = nextVal;
+              textareaEl.setSelectionRange(lineStart, lineStart);
+              resizeTextareaForEdit(textareaEl, true);
+              markDirtyAndScheduleSave();
+            } else {
+              insertTextIntoBody(`\n${bulletMatch[1]}${bulletMatch[2]} `, start, start);
+            }
+            return;
+          }
+
+          const numMatch = /^(\s*)(\d+)\.\s+(.*)$/.exec(beforeCaret);
+          if (numMatch) {
+            ev.preventDefault();
+            if (!numMatch[3].trim()) {
+              const nextVal = val.slice(0, lineStart) + val.slice(start);
+              draft.body = nextVal;
+              textareaEl.value = nextVal;
+              textareaEl.setSelectionRange(lineStart, lineStart);
+              resizeTextareaForEdit(textareaEl, true);
+              markDirtyAndScheduleSave();
+            } else {
+              const nextNum = Number.parseInt(numMatch[2], 10) + 1;
+              insertTextIntoBody(`\n${numMatch[1]}${nextNum}. `, start, start);
+            }
+            return;
+          }
+
+          const quoteMatch = /^(\s*>\s+)(.*)$/.exec(beforeCaret);
+          if (quoteMatch && !/^\[!/.test(quoteMatch[2])) {
+            ev.preventDefault();
+            if (!quoteMatch[2].trim()) {
+              const nextVal = val.slice(0, lineStart) + val.slice(start);
+              draft.body = nextVal;
+              textareaEl.value = nextVal;
+              textareaEl.setSelectionRange(lineStart, lineStart);
+              resizeTextareaForEdit(textareaEl, true);
+              markDirtyAndScheduleSave();
+            } else {
+              insertTextIntoBody(`\n${quoteMatch[1]}`, start, start);
+            }
+          }
         }
       });
 
@@ -1743,6 +2880,9 @@ export function renderEntryEditor(container, state, callbacks = {}) {
           draft.body = lines.join("\n");
           renderProseRegion();
           markDirtyAndScheduleSave();
+        },
+        (rawSrc, alt) => {
+          openPolaroidLightbox([{ url: rawSrc, caption: alt || null }], 0);
         }
       );
       proseRegionEl.appendChild(readDiv);
@@ -1803,6 +2943,9 @@ export function renderEntryEditor(container, state, callbacks = {}) {
 
     draft.photos.forEach((photo, idx) => {
       const card = createPolaroidElement(photo, idx + 1, {
+        onOpenLightbox: () => {
+          openPolaroidLightbox(draft.photos, idx);
+        },
         onRemove: (photoId) => {
           draft.photos = draft.photos.filter((p) => p.id !== photoId);
           renderPhotosSection();
@@ -2061,14 +3204,64 @@ export function renderEntryEditor(container, state, callbacks = {}) {
         await performSave();
       }
     },
+    saveNow: async () => {
+      const hasAnyContent = Boolean(
+        draft.id ||
+          dirty ||
+          editVersion > savedVersion ||
+          draft.body.trim() ||
+          draft.titleInput.trim() ||
+          draft.photos.length > 0 ||
+          draft.audio.length > 0 ||
+          draft.tags.length > 0 ||
+          draft.cover_asset ||
+          draft.mood ||
+          draft.location ||
+          draft.weather
+      );
+      if (!hasAnyContent) {
+        return false;
+      }
+      if (editVersion === savedVersion && !dirty) {
+        editVersion += 1;
+        dirty = true;
+      }
+      await performSave();
+      return true;
+    },
+    syncNav: () => {
+      if (!disposed) {
+        updateAdjacentNavState();
+      }
+    },
+    openFind: () => {
+      if (disposed) return;
+      findOpen = true;
+      renderFindBar();
+    },
+    goAdjacent: (dir) => {
+      updateAdjacentNavState();
+      if (dir === "prev" && prevEntryRef) {
+        callbacks.onOpenEntry?.(prevEntryRef.id, "prev");
+      } else if (dir === "next" && nextEntryRef) {
+        callbacks.onOpenEntry?.(nextEntryRef.id, "next");
+      }
+    },
     isDirty: () => editVersion > savedVersion || dirty || Boolean(inFlightSave),
     toggleMode: () => {
       mode = mode === "write" ? "read" : "write";
+      datePopoverOpen = false;
+      weatherPopoverOpen = false;
+      coverPopoverOpen = false;
+      moreMenuOpen = false;
+      renderDatePopover();
+      renderWeatherPopover();
       callbacks.onModeChange?.(mode);
       renderTopbar();
       renderTitleArea();
       renderProseRegion();
       syncStampOverlay();
+      if (findOpen) applyFindHighlights(false);
     },
     focusEditor: () => {
       textareaEl?.focus();
@@ -2087,9 +3280,17 @@ export function renderEntryEditor(container, state, callbacks = {}) {
         cancelAnimationFrame(shrinkRaf);
         shrinkRaf = null;
       }
-      if (coverPopoverAbort) {
-        coverPopoverAbort.abort();
-        coverPopoverAbort = null;
+      if (topbarPopoverAbort) {
+        topbarPopoverAbort.abort();
+        topbarPopoverAbort = null;
+      }
+      if (datePopoverAbort) {
+        datePopoverAbort.abort();
+        datePopoverAbort = null;
+      }
+      if (weatherPopoverAbort) {
+        weatherPopoverAbort.abort();
+        weatherPopoverAbort = null;
       }
       lifecycleAbort.abort();
       destroyActiveRecorder();

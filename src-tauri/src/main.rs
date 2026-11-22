@@ -4,7 +4,7 @@
 //!
 //! Supports headless CLI administration (`seed-demo`, `import-dayone`, `import-notion`,
 //! `backup`, `restore`, `sync`) alongside the native GTK/Wayland Tauri v2 desktop window
-//! with `vault://` media streaming and all 35 `#[tauri::command]` IPC handlers.
+//! with `vault://` media streaming and all 41 `#[tauri::command]` IPC handlers.
 
 mod audio_rec;
 mod desktop;
@@ -36,9 +36,9 @@ use journal_types::{
     ConnectGdriveOauthRequest, CreateNotebookRequest, DailyContext, DeleteEntryResponse,
     DeleteNotebookResponse, Entry, EntrySummary, GdriveAuthStatus, GeoLocation,
     ImportDayOneRequest, ImportNotionRequest, MigrationReport, Notebook, OnThisDayGroup,
-    PolaroidMeta, RestoreBackupRequest, RestoreBackupResponse, SaveEntryRequest, SearchHit,
-    SearchQuery, StampPlacement, SyncResult, TagCount, Template, UpdateNotebookRequest, VaultStats,
-    VoiceMemoMeta, WeatherInfo,
+    PolaroidMeta, RestoreBackupRequest, RestoreBackupResponse, SaveEntryRequest,
+    SaveTemplateRequest, SearchHit, SearchQuery, StampPlacement, SyncResult, SyncVaultResponse,
+    TagCount, Template, UpdateNotebookRequest, VaultStats, VoiceMemoMeta, WeatherInfo,
 };
 use tauri::{Manager, State};
 use uuid::Uuid;
@@ -518,7 +518,7 @@ fn error_http_response(status: u16, body: Vec<u8>) -> tauri::http::Response<Vec<
 }
 
 // ---------------------------------------------------------------------------
-// 23 Tauri v2 IPC Commands (exact snake_case contract with ui/src/ipc.js)
+// Tauri v2 IPC Commands (exact snake_case contract with ui/src/ipc.js)
 // ---------------------------------------------------------------------------
 
 async fn spawn_vault<T, F>(vault: &Arc<Vault>, f: F) -> Result<T, String>
@@ -660,6 +660,7 @@ async fn save_entry(
     stamps: Option<Vec<StampPlacement>>,
     photos: Option<Vec<PolaroidMeta>>,
     audio: Option<Vec<VoiceMemoMeta>>,
+    cover_asset: Option<String>,
     body: String,
 ) -> Result<Entry, String> {
     spawn_vault(&state.vault, move |vault| {
@@ -677,6 +678,7 @@ async fn save_entry(
                 stamps: stamps.unwrap_or_default(),
                 photos: photos.unwrap_or_default(),
                 audio: audio.unwrap_or_default(),
+                cover_asset,
                 body,
             })
             .map_err(err_str)
@@ -785,6 +787,124 @@ async fn list_templates(state: State<'_, DesktopState>) -> Result<Vec<Template>,
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
+#[tauri::command(rename_all = "snake_case")]
+async fn save_template(
+    state: State<'_, DesktopState>,
+    id: Option<String>,
+    name: String,
+    description: Option<String>,
+    category: Option<String>,
+    default_tags: Option<Vec<String>>,
+    default_mood: Option<String>,
+    body_markdown: String,
+    prompts: Option<Vec<String>>,
+) -> Result<Template, String> {
+    spawn_vault(&state.vault, move |vault| {
+        vault
+            .save_template(SaveTemplateRequest {
+                id,
+                name,
+                description,
+                category,
+                default_tags: default_tags.unwrap_or_default(),
+                default_mood,
+                body_markdown,
+                prompts: prompts.unwrap_or_default(),
+            })
+            .map_err(err_str)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn delete_template(state: State<'_, DesktopState>, id: String) -> Result<bool, String> {
+    spawn_vault(&state.vault, move |vault| {
+        vault.delete_template(&id).map_err(err_str)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn sync_vault(
+    state: State<'_, DesktopState>,
+    full_rebuild: Option<bool>,
+) -> Result<SyncVaultResponse, String> {
+    let rebuild = full_rebuild.unwrap_or(false);
+    spawn_vault(&state.vault, move |vault| {
+        let indexed_count = if rebuild {
+            vault.rebuild_index().map_err(err_str)?
+        } else {
+            vault.sync_index_incremental().map_err(err_str)?
+        };
+        Ok(SyncVaultResponse {
+            indexed_count,
+            full_rebuild: rebuild,
+        })
+    })
+    .await
+}
+
+fn spawn_os_open(target: &str) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(target);
+        c
+    };
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("open");
+        c.arg(target);
+        c
+    };
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("explorer");
+        c.arg(target);
+        c
+    };
+
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Failed to open target: {e}"))?;
+    Ok(())
+}
+
+fn validate_external_url(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.chars().any(|c| c.is_control()) {
+        return Err("Invalid URL".to_string());
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("https://")
+        || lower.starts_with("http://")
+        || lower.starts_with("mailto:")
+    {
+        Ok(trimmed.to_string())
+    } else {
+        Err("Only http://, https://, and mailto: URLs can be opened externally".to_string())
+    }
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn open_vault_folder(state: State<'_, DesktopState>) -> Result<(), String> {
+    let path_str = state.vault.root().to_string_lossy().into_owned();
+    tauri::async_runtime::spawn_blocking(move || spawn_os_open(&path_str))
+        .await
+        .map_err(|e| format!("background task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn open_external_url(url: String) -> Result<(), String> {
+    let safe_url = validate_external_url(&url)?;
+    tauri::async_runtime::spawn_blocking(move || spawn_os_open(&safe_url))
+        .await
+        .map_err(|e| format!("background task failed: {e}"))?
+}
+
 #[tauri::command(rename_all = "snake_case")]
 async fn get_daily_context(
     state: State<'_, DesktopState>,
@@ -847,6 +967,94 @@ async fn import_notion(
             },
         )
         .map_err(err_str)
+    })
+    .await
+}
+
+struct TempFileGuard(PathBuf);
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+const MAX_IMPORT_UPLOAD_BYTES: usize = 256 * 1024 * 1024;
+
+fn write_private_temp_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    let mut opts = fs::OpenOptions::new();
+    opts.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(path).map_err(err_str)?;
+    f.write_all(bytes).map_err(err_str)?;
+    f.sync_all().map_err(err_str)?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+#[tauri::command(rename_all = "snake_case")]
+async fn import_archive_upload(
+    state: State<'_, DesktopState>,
+    source_kind: String,
+    filename: String,
+    data_base64: String,
+    notebook_id: Option<String>,
+    dry_run: Option<bool>,
+) -> Result<MigrationReport, String> {
+    if data_base64.len() > (MAX_IMPORT_UPLOAD_BYTES / 3) * 4 + 1024 {
+        return Err(
+            "Uploaded archive exceeds 256 MB; use Import Path with the local file path instead."
+                .to_string(),
+        );
+    }
+    spawn_vault(&state.vault, move |vault| {
+        let bytes = decode_base64(&data_base64)?;
+        if bytes.is_empty() {
+            return Err("Uploaded archive is empty".to_string());
+        }
+        if bytes.len() > MAX_IMPORT_UPLOAD_BYTES {
+            return Err(
+                "Uploaded archive exceeds 256 MB; use Import Path with the local file path instead."
+                    .to_string(),
+            );
+        }
+        let ext = Path::new(&filename)
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_ascii_lowercase())
+            .filter(|e| matches!(e.as_str(), "zip" | "json" | "md"))
+            .unwrap_or_else(|| "zip".to_string());
+        let tmp_path = std::env::temp_dir().join(format!("log-import-{}.{ext}", Uuid::now_v7()));
+        write_private_temp_file(&tmp_path, &bytes)?;
+        let _guard = TempFileGuard(tmp_path.clone());
+        let path_str = tmp_path.to_string_lossy().into_owned();
+        let is_dry = dry_run.unwrap_or(false);
+
+        match source_kind.trim().to_ascii_lowercase().as_str() {
+            "dayone" => core_import_dayone(
+                &vault,
+                &ImportDayOneRequest {
+                    zip_path: path_str,
+                    notebook_id,
+                    dry_run: is_dry,
+                },
+            )
+            .map_err(err_str),
+            "notion" => core_import_notion(
+                &vault,
+                &ImportNotionRequest {
+                    source_path: path_str,
+                    notebook_id,
+                    dry_run: is_dry,
+                },
+            )
+            .map_err(err_str),
+            other => Err(format!("Unsupported archive import kind: {other}")),
+        }
     })
     .await
 }
@@ -1278,10 +1486,16 @@ fn main() {
                     get_on_this_day,
                     get_backlinks,
                     list_templates,
+                    save_template,
+                    delete_template,
+                    sync_vault,
+                    open_vault_folder,
+                    open_external_url,
                     get_daily_context,
                     get_asset_manifest,
                     import_dayone,
                     import_notion,
+                    import_archive_upload,
                     list_backups,
                     create_backup,
                     restore_backup,
@@ -1488,5 +1702,45 @@ mod tests {
         let flag_cli =
             Cli::try_parse_from(["log-journal", "--software-rendering"]).expect("flag cli parse");
         assert!(flag_cli.software_rendering);
+    }
+
+    #[test]
+    fn validate_external_url_allows_safe_schemes_and_rejects_unsafe() {
+        assert_eq!(
+            validate_external_url(" https://example.com/a?b=1 ").unwrap(),
+            "https://example.com/a?b=1"
+        );
+        assert_eq!(
+            validate_external_url("http://localhost:8080").unwrap(),
+            "http://localhost:8080"
+        );
+        assert_eq!(
+            validate_external_url("mailto:hello@example.com").unwrap(),
+            "mailto:hello@example.com"
+        );
+        assert!(validate_external_url("javascript:alert(1)").is_err());
+        assert!(validate_external_url("file:///etc/passwd").is_err());
+        assert!(validate_external_url("https://example.com/\nfoo").is_err());
+        assert!(validate_external_url("").is_err());
+    }
+
+    #[test]
+    fn private_temp_file_sets_0600_and_guard_cleans_up() {
+        let path = std::env::temp_dir().join(format!("log-priv-test-{}.zip", Uuid::now_v7()));
+        {
+            write_private_temp_file(&path, b"secret-journal-bytes").expect("write private temp");
+            let _guard = TempFileGuard(path.clone());
+            assert!(path.exists());
+            assert_eq!(fs::read(&path).unwrap(), b"secret-journal-bytes");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+                assert_eq!(mode, 0o600);
+            }
+            // create_new must fail if the target path already exists
+            assert!(write_private_temp_file(&path, b"overwrite").is_err());
+        }
+        assert!(!path.exists(), "TempFileGuard must delete temp file on drop");
     }
 }

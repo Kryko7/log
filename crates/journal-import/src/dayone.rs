@@ -645,6 +645,7 @@ fn process_dayone_entry(
         stamps: Vec::new(),
         photos,
         audio,
+        cover_asset: None,
         links: Vec::new(),
     };
 

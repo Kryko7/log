@@ -133,6 +133,7 @@ fn markdown_yaml_round_trip_and_wikilinks() {
         }],
         photos: vec![],
         audio: vec![],
+        cover_asset: Some("/assets/covers/botanical-fern-wash.png".into()),
         links: vec!["Autumn Notes".into(), "Tea Ledger".into()],
     };
 
@@ -187,6 +188,7 @@ fn crud_save_relocate_delete_and_notebooks() {
             stamps: vec![],
             photos: vec![],
             audio: vec![],
+            cover_asset: None,
             body: "Noticed ferns near the creek.".into(),
         })
         .expect("save entry");
@@ -215,6 +217,7 @@ fn crud_save_relocate_delete_and_notebooks() {
             stamps: vec![],
             photos: vec![],
             audio: vec![],
+            cover_asset: None,
             body: "Updated prose with fresh observations.".into(),
         })
         .expect("update entry");
@@ -313,6 +316,7 @@ fn fts5_search_filters_and_snippets() {
             stamps: vec![],
             photos: vec![],
             audio: vec![],
+            cover_asset: None,
             body: "Listening to heavy monsoon rainfall while steeping Ceylon black tea.".into(),
         })
         .unwrap();
@@ -331,6 +335,7 @@ fn fts5_search_filters_and_snippets() {
             stamps: vec![],
             photos: vec![],
             audio: vec![],
+            cover_asset: None,
             body: "Clear skies and cool pavement before sunrise.".into(),
         })
         .unwrap();
@@ -389,6 +394,7 @@ fn backlinks_calendar_on_this_day_and_stats() {
             stamps: vec![],
             photos: vec![],
             audio: vec![],
+            cover_asset: None,
             body: "Built paper lanterns for the courtyard.".into(),
         })
         .unwrap();
@@ -407,6 +413,7 @@ fn backlinks_calendar_on_this_day_and_stats() {
             stamps: vec![],
             photos: vec![],
             audio: vec![],
+            cover_asset: None,
             body: "First frost on the garden gate.".into(),
         })
         .unwrap();
@@ -426,6 +433,7 @@ fn backlinks_calendar_on_this_day_and_stats() {
             stamps: vec![],
             photos: vec![],
             audio: vec![],
+            cover_asset: None,
             body: format!("Remembered [[{}]] while sorting twine.", anchor.id),
         })
         .unwrap();
@@ -444,6 +452,7 @@ fn backlinks_calendar_on_this_day_and_stats() {
             stamps: vec![],
             photos: vec![],
             audio: vec![],
+            cover_asset: None,
             body: "Revisited [[Lantern Workshop|last year's lantern build]].".into(),
         })
         .unwrap();
@@ -497,6 +506,7 @@ fn rebuild_index_recovers_from_deleted_sqlite() {
                 stamps: vec![],
                 photos: vec![],
                 audio: vec![],
+                cover_asset: None,
                 body: "Markdown on disk outlives every database cache.".into(),
             })
             .unwrap();
@@ -651,6 +661,7 @@ fn watch_vault_detects_entry_change() {
             stamps: vec![],
             photos: vec![],
             audio: vec![],
+            cover_asset: None,
             body: "Testing inotify watcher.".into(),
         })
         .unwrap();
@@ -705,6 +716,7 @@ fn incremental_open_syncs_external_add_modify_delete() {
                 stamps: vec![],
                 photos: vec![],
                 audio: vec![],
+                cover_asset: None,
                 body: "Original alpha text.".into(),
             })
             .unwrap();
@@ -722,6 +734,7 @@ fn incremental_open_syncs_external_add_modify_delete() {
                 stamps: vec![],
                 photos: vec![],
                 audio: vec![],
+                cover_asset: None,
                 body: "Beta text to delete.".into(),
             })
             .unwrap();
@@ -786,6 +799,7 @@ fn fts5_escapes_html_in_snippets_and_handles_hyphenated_dates() {
             stamps: vec![],
             photos: vec![],
             audio: vec![],
+            cover_asset: None,
             body: "Logged <script>alert(1)</script> on 2026-11-15 during monsoon rain.".into(),
         })
         .unwrap();
@@ -804,6 +818,7 @@ fn fts5_escapes_html_in_snippets_and_handles_hyphenated_dates() {
             stamps: vec![],
             photos: vec![],
             audio: vec![],
+            cover_asset: None,
             body: "Plain moss notes.".into(),
         })
         .unwrap();
@@ -873,6 +888,7 @@ fn editing_entry_removes_deleted_wikilinks_from_backlinks() {
             stamps: vec![],
             photos: vec![],
             audio: vec![],
+            cover_asset: None,
             body: "Target body.".into(),
         })
         .unwrap();
@@ -919,6 +935,7 @@ fn update_notebook_updates_name_cover_accent_and_preserves_entry_count() {
             stamps: vec![],
             photos: vec![],
             audio: vec![],
+            cover_asset: None,
             body: "Observing lichen.".into(),
         })
         .unwrap();
@@ -1024,6 +1041,7 @@ fn delete_notebook_reassign_and_delete_entries() {
             stamps: vec![],
             photos: vec![],
             audio: vec![],
+            cover_asset: None,
             body: "Should move to daily.".into(),
         })
         .unwrap();
@@ -1044,6 +1062,7 @@ fn delete_notebook_reassign_and_delete_entries() {
             stamps: vec![],
             photos: vec![],
             audio: vec![],
+            cover_asset: None,
             body: "Should be deleted with notebook.".into(),
         })
         .unwrap();
@@ -1088,6 +1107,78 @@ fn delete_notebook_reassign_and_delete_entries() {
         .map(|n| n.id)
         .collect();
     assert_eq!(remaining_ids, vec!["daily".to_string()]);
+}
+
+#[test]
+fn entry_cover_asset_persists_and_clears_across_reloads() {
+    let tmp = TempVault::new("cover-asset");
+    let vault = Vault::open(&tmp.path).unwrap();
+
+    let saved = vault
+        .save_entry(SaveEntryRequest {
+            title: "Pressed Leaves".into(),
+            cover_asset: Some("/assets/covers/pressed-wildflowers.png".into()),
+            body: "A quiet afternoon with pressed meadow flowers.".into(),
+            ..Default::default()
+        })
+        .unwrap();
+
+    assert_eq!(
+        saved.frontmatter.cover_asset.as_deref(),
+        Some("/assets/covers/pressed-wildflowers.png")
+    );
+
+    let reloaded = vault.get_entry(&saved.id.to_string()).unwrap();
+    assert_eq!(
+        reloaded.frontmatter.cover_asset.as_deref(),
+        Some("/assets/covers/pressed-wildflowers.png")
+    );
+
+    let cleared = vault
+        .save_entry(SaveEntryRequest {
+            id: Some(saved.id),
+            title: "Pressed Leaves".into(),
+            cover_asset: Some("   ".into()),
+            body: "Cover removed cleanly.".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(cleared.frontmatter.cover_asset, None);
+    let reloaded2 = vault.get_entry(&saved.id.to_string()).unwrap();
+    assert_eq!(reloaded2.frontmatter.cover_asset, None);
+}
+
+#[test]
+fn custom_templates_can_be_created_loaded_and_deleted() {
+    let tmp = TempVault::new("custom-templates");
+    let vault = Vault::open(&tmp.path).unwrap();
+
+    let initial = vault.list_templates().unwrap();
+    assert_eq!(initial.len(), 4);
+
+    let created = vault
+        .save_template(journal_types::SaveTemplateRequest {
+            id: None,
+            name: "Weekly Review".into(),
+            description: Some("Sunday evening lookback".into()),
+            category: Some("Review".into()),
+            default_tags: vec!["Weekly".into(), "Review".into(), "weekly".into()],
+            default_mood: Some("reflective".into()),
+            body_markdown: "## Highlights\n\n- \n\n## Next Week\n\n- [ ] \n".into(),
+            prompts: vec!["What stood out most this week?".into()],
+        })
+        .unwrap();
+
+    assert_eq!(created.id, "weekly-review");
+    assert_eq!(created.default_tags, vec!["weekly", "review"]);
+
+    let after_create = vault.list_templates().unwrap();
+    assert_eq!(after_create.len(), 5);
+    assert!(after_create.iter().any(|t| t.id == "weekly-review"));
+
+    assert!(vault.delete_template("weekly-review").unwrap());
+    assert!(!vault.delete_template("weekly-review").unwrap());
+    assert_eq!(vault.list_templates().unwrap().len(), 4);
 }
 
 /// Build a valid JPEG APP1 EXIF segment (little-endian TIFF) with DateTimeOriginal & GPS.

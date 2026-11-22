@@ -346,6 +346,7 @@ fn process_notion_entry(
         stamps: Vec::new(),
         photos,
         audio: Vec::new(),
+        cover_asset: None,
         links: Vec::new(),
     };
 

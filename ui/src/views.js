@@ -199,6 +199,13 @@ function buildTimelineRow(entry, notebookName, callbacks, subMode = "weekday") {
   }
   if (cleanSnippet) {
     proseCol.appendChild(el("p", "timeline-row-excerpt", cleanSnippet));
+  } else if (!showTitle) {
+    const fallbackLabel = entry.has_photos
+      ? "Photo entry"
+      : entry.has_audio
+        ? "Voice note"
+        : "Untitled entry";
+    proseCol.appendChild(el("p", "timeline-row-excerpt is-muted", fallbackLabel));
   }
 
   const meta = el("div", "timeline-row-meta");
@@ -335,8 +342,7 @@ const NOTEBOOK_ACCENT_PALETTE = [
  */
 export function renderTimelineView(container, state, callbacks = {}) {
   container.innerHTML = "";
-  const entries = [...(state.filteredEntries ?? state.entries ?? [])];
-  entries.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  const baseEntries = [...(state.filteredEntries ?? state.entries ?? [])];
   const notebooks = state.notebooks ?? [];
   const nbMap = new Map(notebooks.map((nb) => [nb.id, nb.name]));
 
@@ -344,18 +350,27 @@ export function renderTimelineView(container, state, callbacks = {}) {
     ? notebooks.find((nb) => nb.id === state.selectedNotebookId) || null
     : null;
   const selectedTag = state.selectedTag || null;
-  const hasFilter = Boolean(state.selectedNotebookId || selectedTag);
+  const isStarredView = Boolean(state.starredOnly);
+  const hasFilter = Boolean(state.selectedNotebookId || selectedTag || isStarredView);
 
   let headingTitle = "All Entries";
   let subtitlePrefix = "";
   let clearLabel = "Show all entries";
-  if (selectedNb || state.selectedNotebookId) {
+  if (isStarredView && !selectedNb && !selectedTag) {
+    headingTitle = "Starred Entries";
+    subtitlePrefix = "Favorites";
+    clearLabel = "Show all entries";
+  } else if (selectedNb || state.selectedNotebookId) {
     headingTitle = selectedNb?.name || "Notebook";
-    subtitlePrefix = selectedTag ? `Notebook · #${selectedTag}` : "Notebook";
+    subtitlePrefix = selectedTag
+      ? `Notebook · #${selectedTag}`
+      : isStarredView
+        ? "Notebook · Starred"
+        : "Notebook";
     clearLabel = "Show all entries";
   } else if (selectedTag) {
     headingTitle = `#${selectedTag}`;
-    subtitlePrefix = "Tag";
+    subtitlePrefix = isStarredView ? "Tag · Starred" : "Tag";
     clearLabel = "Clear filter";
   }
 
@@ -365,15 +380,15 @@ export function renderTimelineView(container, state, callbacks = {}) {
   const header = el("header", "stage-header");
   const titleWrap = el("div");
   titleWrap.appendChild(el("h1", "stage-serif-title", headingTitle));
-  const n = entries.length;
-  const countLabel = `${n} ${n === 1 ? "entry" : "entries"}`;
-  titleWrap.appendChild(
-    el(
-      "p",
-      "stage-subtitle",
-      subtitlePrefix ? `${subtitlePrefix} · ${countLabel}` : countLabel
-    )
-  );
+  const subtitleEl = el("p", "stage-subtitle", "");
+  titleWrap.appendChild(subtitleEl);
+  const updateSubtitleCount = (count) => {
+    const countLabel = `${count} ${count === 1 ? "entry" : "entries"}`;
+    subtitleEl.textContent = subtitlePrefix
+      ? `${subtitlePrefix} · ${countLabel}`
+      : countLabel;
+  };
+  updateSubtitleCount(baseEntries.length);
 
   let panelMode = null;
   const panelSlot = el("div", "notebook-inline-panel-slot");
@@ -564,7 +579,7 @@ export function renderTimelineView(container, state, callbacks = {}) {
       panelSlot.appendChild(card);
     } else if (panelMode === "delete") {
       const card = el("div", "notebook-inline-card is-danger");
-      const nbCount = Number(selectedNb.entry_count ?? entries.length ?? 0);
+      const nbCount = Number(selectedNb.entry_count ?? baseEntries.length ?? 0);
       card.appendChild(
         el(
           "p",
@@ -712,108 +727,249 @@ export function renderTimelineView(container, state, callbacks = {}) {
   section.appendChild(header);
   section.appendChild(panelSlot);
 
-  if (entries.length === 0) {
-    const empty = el("div", "editorial-empty-card");
-    empty.innerHTML = icon("feather", "empty-emblem");
-    empty.appendChild(el("h2", "empty-serif-heading", "No entries yet"));
-    empty.appendChild(
-      el(
-        "p",
-        "empty-prose-note",
-        hasFilter
-          ? "No entries match this filter yet."
-          : "Start writing a new entry to begin this journal."
-      )
-    );
-    const emptyActions = el("div", "stage-header-actions");
-    if (hasFilter && callbacks.onClearFilters) {
-      const clearEmptyBtn = el("button", "btn-editorial btn-ghost", clearLabel);
-      clearEmptyBtn.type = "button";
-      clearEmptyBtn.addEventListener("click", () => callbacks.onClearFilters?.());
-      emptyActions.appendChild(clearEmptyBtn);
-    }
-    if (onNew) {
-      const btn = el("button", "btn-editorial btn-sage");
+  // Quiet Timeline Filter & Sort Toolbar (only shown when baseEntries has entries)
+  const localFilter = {
+    text: "",
+    starred: false,
+    photos: false,
+    audio: false,
+    mood: "",
+    sort: "newest",
+  };
+
+  const listRegion = el("div", "timeline-list-region");
+
+  if (baseEntries.length > 0) {
+    const filterBar = el("div", "timeline-filter-bar");
+
+    const filterSearchWrap = el("div", "timeline-filter-search");
+    filterSearchWrap.innerHTML = icon("search", "tiny-icon");
+    const filterInput = document.createElement("input");
+    filterInput.type = "text";
+    filterInput.className = "timeline-filter-input";
+    filterInput.placeholder = "Filter these entries…";
+    filterInput.setAttribute("aria-label", "Filter entries");
+    filterSearchWrap.appendChild(filterInput);
+    filterBar.appendChild(filterSearchWrap);
+
+    const pills = el("div", "timeline-filter-pills");
+
+    const makeTogglePill = (label, icName, key) => {
+      const btn = el("button", "filter-pill-btn");
       btn.type = "button";
-      btn.innerHTML = `${icon("feather")}<span>New Entry</span>`;
-      btn.addEventListener("click", () => onNew());
-      emptyActions.appendChild(btn);
+      btn.innerHTML = `${icon(icName, "tiny-icon")}<span>${escapeHtml(label)}</span>`;
+      btn.addEventListener("click", () => {
+        localFilter[key] = !localFilter[key];
+        btn.classList.toggle("is-active", localFilter[key]);
+        renderFilteredRiver();
+      });
+      return btn;
+    };
+
+    if (!isStarredView) {
+      pills.appendChild(makeTogglePill("Starred", "star", "starred"));
     }
-    if (emptyActions.childNodes.length > 0) {
-      empty.appendChild(emptyActions);
+    pills.appendChild(makeTogglePill("Photos", "camera", "photos"));
+    pills.appendChild(makeTogglePill("Voice", "mic", "audio"));
+
+    const availableMoods = Array.from(
+      new Set(baseEntries.map((e) => e.mood).filter(Boolean))
+    ).sort();
+    if (availableMoods.length > 0) {
+      const moodSel = document.createElement("select");
+      moodSel.className = "filter-pill-select";
+      moodSel.setAttribute("aria-label", "Filter by mood");
+      const allM = document.createElement("option");
+      allM.value = "";
+      allM.textContent = "All moods";
+      moodSel.appendChild(allM);
+      for (const m of availableMoods) {
+        const opt = document.createElement("option");
+        opt.value = m;
+        opt.textContent = m;
+        moodSel.appendChild(opt);
+      }
+      moodSel.addEventListener("change", () => {
+        localFilter.mood = moodSel.value;
+        renderFilteredRiver();
+      });
+      pills.appendChild(moodSel);
     }
-    section.appendChild(empty);
-    container.appendChild(section);
-    return;
+
+    const sortSel = document.createElement("select");
+    sortSel.className = "filter-pill-select";
+    sortSel.setAttribute("aria-label", "Sort entries");
+    for (const [val, txt] of [
+      ["newest", "Newest first"],
+      ["oldest", "Oldest first"],
+      ["longest", "Longest first"],
+    ]) {
+      const opt = document.createElement("option");
+      opt.value = val;
+      opt.textContent = txt;
+      sortSel.appendChild(opt);
+    }
+    sortSel.addEventListener("change", () => {
+      localFilter.sort = sortSel.value;
+      renderFilteredRiver();
+    });
+    pills.appendChild(sortSel);
+
+    filterBar.appendChild(pills);
+    section.appendChild(filterBar);
+
+    filterInput.addEventListener("input", () => {
+      localFilter.text = filterInput.value.trim().toLowerCase();
+      renderFilteredRiver();
+    });
   }
 
-  const TIMELINE_BATCH_SIZE = 80;
-  let renderedCount = 0;
-  let currentMonthKey = null;
-  let currentRowsEl = null;
-  let currentCountEl = null;
-  let currentMonthCount = 0;
-
-  const monthsList = el("div", "timeline-months-list");
-  const loadMoreRow = el("div", "timeline-load-more-row");
-
-  function appendNextBatch() {
-    const slice = entries.slice(renderedCount, renderedCount + TIMELINE_BATCH_SIZE);
-    if (slice.length === 0) return;
-
-    const frag = document.createDocumentFragment();
-    for (const entry of slice) {
-      const dt = new Date(entry.date);
-      const y = dt.getFullYear();
-      const m = dt.getMonth() + 1;
-      const key = `${y}-${String(m).padStart(2, "0")}`;
-
-      if (key !== currentMonthKey || !currentRowsEl) {
-        currentMonthKey = key;
-        currentMonthCount = 0;
-
-        const groupEl = el("section", "timeline-month-group");
-        const divider = el("div", "timeline-month-divider");
-        divider.appendChild(el("span", "timeline-month-heading", formatMonthYear(y, m)));
-        currentCountEl = el("span", "timeline-month-count small-caps-meta", "");
-        divider.appendChild(currentCountEl);
-        groupEl.appendChild(divider);
-
-        currentRowsEl = el("div", "timeline-rows");
-        groupEl.appendChild(currentRowsEl);
-        frag.appendChild(groupEl);
+  function renderFilteredRiver() {
+    listRegion.innerHTML = "";
+    const hasLocalFilter = Boolean(
+      localFilter.text || localFilter.starred || localFilter.photos || localFilter.audio || localFilter.mood
+    );
+    const entries = baseEntries.filter((e) => {
+      if (localFilter.starred && !e.starred) return false;
+      if (localFilter.photos && !e.has_photos) return false;
+      if (localFilter.audio && !e.has_audio) return false;
+      if (localFilter.mood && e.mood !== localFilter.mood) return false;
+      if (localFilter.text) {
+        const hay = `${e.title || ""} ${e.snippet || ""} ${(e.tags || []).join(" ")} ${
+          e.location?.place_name || ""
+        }`.toLowerCase();
+        if (!hay.includes(localFilter.text)) return false;
       }
+      return true;
+    });
 
-      const nbName = entry.notebook_id ? nbMap.get(entry.notebook_id) : null;
-      currentRowsEl.appendChild(buildTimelineRow(entry, nbName, callbacks, "weekday"));
-      currentMonthCount += 1;
-      if (currentCountEl) {
-        currentCountEl.textContent = `${currentMonthCount} ${
-          currentMonthCount === 1 ? "entry" : "entries"
-        }`;
-      }
+    if (localFilter.sort === "oldest") {
+      entries.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    } else if (localFilter.sort === "longest") {
+      entries.sort((a, b) => (b.word_count || 0) - (a.word_count || 0));
+    } else {
+      entries.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     }
 
-    monthsList.appendChild(frag);
-    renderedCount += slice.length;
+    updateSubtitleCount(entries.length);
 
-    const remaining = entries.length - renderedCount;
-    loadMoreRow.innerHTML = "";
-    if (remaining > 0) {
-      const moreBtn = el(
-        "button",
-        "btn-editorial btn-ghost",
-        `Show more (${remaining} older ${remaining === 1 ? "entry" : "entries"})`
+    if (entries.length === 0) {
+      const empty = el("div", "editorial-empty-card");
+      empty.innerHTML = icon("feather", "empty-emblem");
+      empty.appendChild(
+        el("h2", "empty-serif-heading", hasLocalFilter ? "No matching entries" : "No entries yet")
       );
-      moreBtn.type = "button";
-      moreBtn.addEventListener("click", appendNextBatch);
-      loadMoreRow.appendChild(moreBtn);
+      empty.appendChild(
+        el(
+          "p",
+          "empty-prose-note",
+          hasLocalFilter || hasFilter
+            ? "No entries match this filter yet."
+            : "Start writing a new entry to begin this journal."
+        )
+      );
+      const emptyActions = el("div", "stage-header-actions");
+      if (hasFilter && !hasLocalFilter && callbacks.onClearFilters) {
+        const clearEmptyBtn = el("button", "btn-editorial btn-ghost", clearLabel);
+        clearEmptyBtn.type = "button";
+        clearEmptyBtn.addEventListener("click", () => callbacks.onClearFilters?.());
+        emptyActions.appendChild(clearEmptyBtn);
+      }
+      if (onNew) {
+        const btn = el("button", "btn-editorial btn-sage");
+        btn.type = "button";
+        btn.innerHTML = `${icon("feather")}<span>New Entry</span>`;
+        btn.addEventListener("click", () => onNew());
+        emptyActions.appendChild(btn);
+      }
+      if (emptyActions.childNodes.length > 0) {
+        empty.appendChild(emptyActions);
+      }
+      listRegion.appendChild(empty);
+      return;
     }
+
+    const TIMELINE_BATCH_SIZE = 80;
+    let renderedCount = 0;
+    let currentMonthKey = null;
+    let currentRowsEl = null;
+    let currentCountEl = null;
+    let currentMonthCount = 0;
+
+    const monthsList = el("div", "timeline-months-list");
+    const loadMoreRow = el("div", "timeline-load-more-row");
+    const groupByMonth = localFilter.sort !== "longest";
+
+    function appendNextBatch() {
+      const slice = entries.slice(renderedCount, renderedCount + TIMELINE_BATCH_SIZE);
+      if (slice.length === 0) return;
+
+      const frag = document.createDocumentFragment();
+      for (const entry of slice) {
+        if (groupByMonth) {
+          const dt = new Date(entry.date);
+          const y = dt.getFullYear();
+          const m = dt.getMonth() + 1;
+          const key = `${y}-${String(m).padStart(2, "0")}`;
+
+          if (key !== currentMonthKey || !currentRowsEl) {
+            currentMonthKey = key;
+            currentMonthCount = 0;
+
+            const groupEl = el("section", "timeline-month-group");
+            const divider = el("div", "timeline-month-divider");
+            divider.appendChild(el("span", "timeline-month-heading", formatMonthYear(y, m)));
+            currentCountEl = el("span", "timeline-month-count small-caps-meta", "");
+            divider.appendChild(currentCountEl);
+            groupEl.appendChild(divider);
+
+            currentRowsEl = el("div", "timeline-rows");
+            groupEl.appendChild(currentRowsEl);
+            frag.appendChild(groupEl);
+          }
+        } else if (!currentRowsEl) {
+          const groupEl = el("section", "timeline-month-group");
+          currentRowsEl = el("div", "timeline-rows");
+          groupEl.appendChild(currentRowsEl);
+          frag.appendChild(groupEl);
+        }
+
+        const nbName = entry.notebook_id ? nbMap.get(entry.notebook_id) : null;
+        currentRowsEl.appendChild(
+          buildTimelineRow(entry, nbName, callbacks, groupByMonth ? "weekday" : "year")
+        );
+        currentMonthCount += 1;
+        if (groupByMonth && currentCountEl) {
+          currentCountEl.textContent = `${currentMonthCount} ${
+            currentMonthCount === 1 ? "entry" : "entries"
+          }`;
+        }
+      }
+
+      monthsList.appendChild(frag);
+      renderedCount += slice.length;
+
+      const remaining = entries.length - renderedCount;
+      loadMoreRow.innerHTML = "";
+      if (remaining > 0) {
+        const moreBtn = el(
+          "button",
+          "btn-editorial btn-ghost",
+          `Show more (${remaining} more ${remaining === 1 ? "entry" : "entries"})`
+        );
+        moreBtn.type = "button";
+        moreBtn.addEventListener("click", appendNextBatch);
+        loadMoreRow.appendChild(moreBtn);
+      }
+    }
+
+    appendNextBatch();
+    listRegion.appendChild(monthsList);
+    listRegion.appendChild(loadMoreRow);
   }
 
-  appendNextBatch();
-  section.appendChild(monthsList);
-  section.appendChild(loadMoreRow);
+  renderFilteredRiver();
+  section.appendChild(listRegion);
   container.appendChild(section);
 }
 
@@ -830,9 +986,21 @@ export function renderCalendarView(container, state, callbacks = {}) {
   const month = state.calendarMonth || now.getMonth() + 1;
   const days = state.calendarDays || [];
   const entries = state.entries || [];
+  const notebooks = state.notebooks || [];
+  const nbMap = new Map(notebooks.map((nb) => [nb.id, nb.name]));
 
   const dayMap = new Map(days.map((d) => [d.date, d]));
   const entryMap = new Map(entries.map((e) => [e.id, e]));
+
+  const entriesForDate = (dateStr) =>
+    entries
+      .filter((e) => {
+        if (state.selectedNotebookId && e.notebook_id !== state.selectedNotebookId) {
+          return false;
+        }
+        return String(e.date || "").slice(0, 10) === dateStr;
+      })
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
   const section = el("section", "calendar-stage");
   section.setAttribute("aria-label", "Calendar");
@@ -840,10 +1008,42 @@ export function renderCalendarView(container, state, callbacks = {}) {
   const header = el("header", "stage-header");
   const titleWrap = el("div");
   titleWrap.appendChild(el("h1", "stage-serif-title", formatMonthYear(year, month)));
-  titleWrap.appendChild(el("p", "stage-subtitle", "Calendar"));
+  const activeNbName = state.selectedNotebookId
+    ? nbMap.get(state.selectedNotebookId) || state.selectedNotebookId
+    : "All Notebooks";
+  const monthEntryTotal = days.reduce((acc, d) => acc + Number(d.entry_count || 0), 0);
+  titleWrap.appendChild(
+    el(
+      "p",
+      "stage-subtitle",
+      `${activeNbName} · ${monthEntryTotal} ${monthEntryTotal === 1 ? "entry" : "entries"}`
+    )
+  );
   header.appendChild(titleWrap);
 
   const nav = el("div", "calendar-nav-controls");
+
+  if (notebooks.length > 0 && callbacks.onChangeNotebookFilter) {
+    const nbSel = document.createElement("select");
+    nbSel.className = "filter-pill-select";
+    nbSel.setAttribute("aria-label", "Filter calendar by notebook");
+    const allOpt = document.createElement("option");
+    allOpt.value = "";
+    allOpt.textContent = "All Notebooks";
+    nbSel.appendChild(allOpt);
+    for (const nb of notebooks) {
+      const opt = document.createElement("option");
+      opt.value = nb.id;
+      opt.textContent = nb.name;
+      if (state.selectedNotebookId === nb.id) opt.selected = true;
+      nbSel.appendChild(opt);
+    }
+    nbSel.addEventListener("change", () => {
+      callbacks.onChangeNotebookFilter(nbSel.value || null);
+    });
+    nav.appendChild(nbSel);
+  }
+
   const prevBtn = el("button", "icon-btn");
   prevBtn.type = "button";
   prevBtn.title = "Previous month";
@@ -885,11 +1085,77 @@ export function renderCalendarView(container, state, callbacks = {}) {
     now.getDate()
   ).padStart(2, "0")}`;
 
+  let selectedDateStr = state.calendarSelectedDate || null;
+  if (selectedDateStr && !selectedDateStr.startsWith(`${year}-${String(month).padStart(2, "0")}-`)) {
+    selectedDateStr = null;
+  }
+
+  const dayDrawer = el("section", "calendar-day-drawer");
+  dayDrawer.hidden = true;
+
+  const renderDayDrawer = () => {
+    dayDrawer.innerHTML = "";
+    if (!selectedDateStr) {
+      dayDrawer.hidden = true;
+      return;
+    }
+    const dayEntries = entriesForDate(selectedDateStr);
+    dayDrawer.hidden = false;
+
+    const head = el("div", "calendar-day-drawer-head");
+    const parsed = new Date(`${selectedDateStr}T12:00:00`);
+    const humanDate = !Number.isNaN(parsed.getTime())
+      ? parsed.toLocaleDateString(undefined, {
+          weekday: "long",
+          month: "long",
+          day: "numeric",
+          year: "numeric",
+        })
+      : selectedDateStr;
+
+    const headTitle = el("div");
+    headTitle.appendChild(el("h2", "calendar-drawer-heading", humanDate));
+    headTitle.appendChild(
+      el(
+        "span",
+        "small-caps-meta",
+        `${dayEntries.length} ${dayEntries.length === 1 ? "entry" : "entries"}`
+      )
+    );
+
+    const headActions = el("div", "stage-header-actions");
+    const addDayBtn = el("button", "btn-editorial btn-sage small");
+    addDayBtn.type = "button";
+    addDayBtn.innerHTML = `${icon("plus", "tiny-icon")}<span>New entry on this day</span>`;
+    addDayBtn.addEventListener("click", () => {
+      callbacks.onNewEntryForDate?.(selectedDateStr);
+    });
+    headActions.appendChild(addDayBtn);
+    head.append(headTitle, headActions);
+    dayDrawer.appendChild(head);
+
+    if (dayEntries.length === 0) {
+      dayDrawer.appendChild(
+        el("p", "empty-prose-note", "No entries recorded on this date yet.")
+      );
+      return;
+    }
+
+    const rowsEl = el("div", "timeline-rows");
+    for (const entry of dayEntries) {
+      const nbName = entry.notebook_id ? nbMap.get(entry.notebook_id) : null;
+      rowsEl.appendChild(buildTimelineRow(entry, nbName, callbacks, "weekday"));
+    }
+    dayDrawer.appendChild(rowsEl);
+  };
+
   for (let i = 0; i < leadingEmpty; i++) {
     const pad = el("div", "calendar-day-cell is-pad");
     pad.setAttribute("aria-hidden", "true");
     grid.appendChild(pad);
   }
+
+  const cellNodes = new Map();
 
   for (let day = 1; day <= daysInMonth; day++) {
     const dateStr = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
@@ -901,6 +1167,7 @@ export function renderCalendarView(container, state, callbacks = {}) {
     const cell = el("button", "calendar-day-cell");
     cell.type = "button";
     if (dateStr === todayStr) cell.classList.add("is-today");
+    if (dateStr === selectedDateStr) cell.classList.add("is-selected");
     if (summary && summary.entry_count > 0) cell.classList.add("has-entries");
     if (primaryEntry?.cover_photo) cell.classList.add("has-photo");
 
@@ -950,20 +1217,36 @@ export function renderCalendarView(container, state, callbacks = {}) {
     cell.appendChild(bottom);
 
     cell.addEventListener("click", () => {
-      if (callbacks.onSelectDate) {
-        callbacks.onSelectDate(dateStr, summary);
-      } else if (summary?.primary_entry_id) {
+      const dayEntries = entriesForDate(dateStr);
+      if (dayEntries.length === 0 && !summary?.entry_count) {
+        callbacks.onNewEntryForDate?.(dateStr);
+        return;
+      }
+      selectedDateStr = dateStr;
+      state.calendarSelectedDate = dateStr;
+      for (const [k, node] of cellNodes.entries()) {
+        node.classList.toggle("is-selected", k === dateStr);
+      }
+      renderDayDrawer();
+      dayDrawer.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+
+    cell.addEventListener("dblclick", () => {
+      if (summary?.primary_entry_id) {
         callbacks.onOpenEntry?.(summary.primary_entry_id);
       } else {
         callbacks.onNewEntryForDate?.(dateStr);
       }
     });
 
+    cellNodes.set(dateStr, cell);
     grid.appendChild(cell);
   }
 
   sheet.appendChild(grid);
   section.appendChild(sheet);
+  renderDayDrawer();
+  section.appendChild(dayDrawer);
   container.appendChild(section);
 }
 
@@ -1039,7 +1322,11 @@ export function renderOnThisDayView(container, state, callbacks = {}) {
   container.appendChild(section);
 }
 
-function openPolaroidLightbox(photo) {
+export function openPolaroidLightbox(photosOrPhoto, startIndex = 0) {
+  const photos = Array.isArray(photosOrPhoto) ? photosOrPhoto : [photosOrPhoto];
+  if (photos.length === 0) return;
+  let currentIdx = Math.max(0, Math.min(startIndex, photos.length - 1));
+
   const backdrop = el("div", "editorial-modal-backdrop");
   const sheet = el("div", "polaroid-lightbox-sheet");
 
@@ -1050,15 +1337,61 @@ function openPolaroidLightbox(photo) {
 
   const img = document.createElement("img");
   img.className = "polaroid-lightbox-img";
-  img.src = resolveVaultUrl(photo.url);
-  img.alt = photo.caption || "Journal photograph";
   img.decoding = "async";
 
-  sheet.appendChild(closeBtn);
-  sheet.appendChild(img);
-  if (photo.caption) {
-    sheet.appendChild(el("p", "polaroid-lightbox-caption", photo.caption));
+  const captionEl = el("p", "polaroid-lightbox-caption", "");
+  const metaEl = el("p", "polaroid-lightbox-meta small-caps-meta", "");
+
+  let prevBtn = null;
+  let nextBtn = null;
+  if (photos.length > 1) {
+    prevBtn = el("button", "polaroid-lightbox-nav is-prev");
+    prevBtn.type = "button";
+    prevBtn.setAttribute("aria-label", "Previous photograph");
+    prevBtn.innerHTML = icon("chevronLeft");
+
+    nextBtn = el("button", "polaroid-lightbox-nav is-next");
+    nextBtn.type = "button";
+    nextBtn.setAttribute("aria-label", "Next photograph");
+    nextBtn.innerHTML = icon("chevronRight");
   }
+
+  const renderCurrent = () => {
+    const p = photos[currentIdx];
+    img.src = resolveVaultUrl(p.url || p.thumbnail_url);
+    img.alt = p.caption || "Journal photograph";
+    captionEl.textContent = p.caption || "";
+    captionEl.hidden = !p.caption;
+
+    const metaParts = [];
+    if (photos.length > 1) {
+      metaParts.push(`${currentIdx + 1} / ${photos.length}`);
+    }
+    if (p.location?.place_name) {
+      metaParts.push(p.location.place_name);
+    }
+    if (p.taken_at) {
+      const dt = new Date(p.taken_at);
+      if (!Number.isNaN(dt.getTime())) {
+        metaParts.push(dt.toLocaleDateString());
+      }
+    }
+    metaEl.textContent = metaParts.join(" · ");
+    metaEl.hidden = metaParts.length === 0;
+  };
+
+  const step = (delta) => {
+    if (photos.length <= 1) return;
+    currentIdx = (currentIdx + delta + photos.length) % photos.length;
+    renderCurrent();
+  };
+
+  sheet.appendChild(closeBtn);
+  if (prevBtn) sheet.appendChild(prevBtn);
+  sheet.appendChild(img);
+  if (nextBtn) sheet.appendChild(nextBtn);
+  sheet.append(captionEl, metaEl);
+  renderCurrent();
 
   const ac = new AbortController();
   function close() {
@@ -1066,6 +1399,8 @@ function openPolaroidLightbox(photo) {
     backdrop.remove();
   }
   closeBtn.addEventListener("click", close, { signal: ac.signal });
+  prevBtn?.addEventListener("click", () => step(-1), { signal: ac.signal });
+  nextBtn?.addEventListener("click", () => step(1), { signal: ac.signal });
   backdrop.addEventListener(
     "click",
     (ev) => {
@@ -1081,6 +1416,8 @@ function openPolaroidLightbox(photo) {
         return;
       }
       if (ev.key === "Escape") close();
+      else if (ev.key === "ArrowLeft") step(-1);
+      else if (ev.key === "ArrowRight") step(1);
     },
     { signal: ac.signal }
   );
@@ -1199,6 +1536,9 @@ export function createPolaroidElement(photo, figureNumber, callbacks = {}) {
     input.className = "polaroid-caption-input";
     input.value = photo.caption || "";
     input.placeholder = "Add a caption…";
+    input.addEventListener("input", () => {
+      callbacks.onUpdateCaption(photo.id, input.value);
+    });
     input.addEventListener("change", () => {
       callbacks.onUpdateCaption(photo.id, input.value);
     });
@@ -1443,6 +1783,15 @@ export function renderStampPickerPopover(container, manifest, onPick, onClose) {
   container.appendChild(pop);
 }
 
+function decodeBasicHtmlEntities(str) {
+  return String(str ?? "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
 function appendSafeHighlightedSnippet(parent, snippetHtml) {
   const raw = String(snippetHtml || "");
   const parts = raw.split(/(<mark>.*?<\/mark>)/gi);
@@ -1450,29 +1799,61 @@ function appendSafeHighlightedSnippet(parent, snippetHtml) {
     const m = /^<mark>([\s\S]*)<\/mark>$/i.exec(part);
     if (m) {
       const mark = document.createElement("mark");
-      mark.textContent = m[1];
+      mark.textContent = decodeBasicHtmlEntities(m[1]);
       parent.appendChild(mark);
     } else {
-      parent.appendChild(document.createTextNode(part));
+      parent.appendChild(document.createTextNode(decodeBasicHtmlEntities(part)));
     }
   }
 }
 
 /**
- * Render the FTS5 full-text Search modal.
+ * Render the FTS5 full-text Search modal with structured filters & keyboard navigation.
  * @param {HTMLElement} container
  * @param {object} state
  * @param {object} callbacks
  */
 export function renderSearchModal(container, state, callbacks = {}) {
-  const existingInput = container.querySelector(".search-modal-input");
-  const existingResults = container.querySelector(".search-results-list");
+  container.__searchCallbacks = callbacks;
+  const existing = container.querySelector('[data-log-modal="search"]');
   const hits = state.searchResults || [];
+  const filters = state.searchFilters || {
+    starred_only: false,
+    notebook_id: "",
+    mood: "",
+    tag: "",
+    from_date: "",
+    to_date: "",
+  };
+  const hasAnyCriteria = Boolean(
+    (state.searchQuery || "").trim() ||
+      filters.starred_only ||
+      filters.notebook_id ||
+      filters.mood ||
+      filters.tag ||
+      filters.from_date ||
+      filters.to_date
+  );
 
   function fillResults(listEl) {
     listEl.innerHTML = "";
+    container.__searchHits = hits;
+    if (typeof container.__searchActiveIdx !== "number" || container.__searchActiveIdx >= hits.length) {
+      container.__searchActiveIdx = 0;
+    }
+
     if (state.searchLoading) {
       listEl.appendChild(el("div", "empty-prose-note", "Searching…"));
+      return;
+    }
+    if (!hasAnyCriteria) {
+      listEl.appendChild(
+        el(
+          "div",
+          "empty-prose-note",
+          "Type keywords or select a filter below. Use Up/Down arrows and Enter to jump to an entry."
+        )
+      );
       return;
     }
     if (!hits.length) {
@@ -1480,16 +1861,25 @@ export function renderSearchModal(container, state, callbacks = {}) {
       return;
     }
 
-    for (const hit of hits) {
+    hits.forEach((hit, idx) => {
       const summary = hit.summary || hit;
-      const card = el("button", "search-hit-card");
+      const card = el(
+        "button",
+        `search-hit-card${idx === container.__searchActiveIdx ? " is-selected" : ""}`
+      );
       card.type = "button";
+      card.dataset.hitIdx = String(idx);
 
       const head = el("div", "search-hit-head");
       const titleText = isAutoDerivedTitle(summary.title, summary.snippet)
         ? formatDateParts(summary.date).full
         : summary.title;
       head.appendChild(el("span", "search-hit-title", titleText));
+      if (summary.starred) {
+        const star = el("span", "meta-star-mark");
+        star.innerHTML = icon("starFilled", "tiny-icon");
+        head.appendChild(star);
+      }
       head.appendChild(el("span", "small-caps-meta", formatDateParts(summary.date).full));
       card.appendChild(head);
 
@@ -1500,24 +1890,59 @@ export function renderSearchModal(container, state, callbacks = {}) {
       );
       card.appendChild(snip);
 
+      const hitMetaParts = [];
+      const nbObj = (state.notebooks || []).find((n) => n.id === summary.notebook_id);
+      if (nbObj?.name) hitMetaParts.push(nbObj.name);
+      if (summary.mood) hitMetaParts.push(summary.mood);
+      if (Array.isArray(summary.tags) && summary.tags.length > 0) {
+        hitMetaParts.push(...summary.tags.slice(0, 3).map((t) => `#${t}`));
+      }
+      if (hitMetaParts.length > 0) {
+        card.appendChild(el("div", "search-hit-meta small-caps-meta", hitMetaParts.join(" · ")));
+      }
+
+      card.addEventListener("mouseenter", () => {
+        container.__searchActiveIdx = idx;
+        listEl.querySelectorAll(".search-hit-card").forEach((c, i) => {
+          c.classList.toggle("is-selected", i === idx);
+        });
+      });
+
       card.addEventListener("click", () => {
-        callbacks.onSelectEntry?.(summary.id);
-        callbacks.onClose?.();
+        container.__searchCallbacks?.onSelectEntry?.(summary.id);
+        container.__searchCallbacks?.onClose?.();
       });
       listEl.appendChild(card);
-    }
+    });
   }
 
-  if (existingInput && existingResults) {
-    if (existingInput.value !== (state.searchQuery || "")) {
+  if (existing) {
+    const existingInput = existing.querySelector(".search-modal-input");
+    const existingResults = existing.querySelector(".search-results-list");
+    if (existingInput && document.activeElement !== existingInput && existingInput.value !== (state.searchQuery || "")) {
       existingInput.value = state.searchQuery || "";
     }
-    fillResults(existingResults);
+    const starChip = existing.querySelector('[data-search-filter="starred"]');
+    if (starChip) starChip.classList.toggle("is-active", Boolean(filters.starred_only));
+    const nbSel = existing.querySelector('[data-search-filter="notebook"]');
+    if (nbSel && nbSel.value !== (filters.notebook_id || "")) nbSel.value = filters.notebook_id || "";
+    const moodSel = existing.querySelector('[data-search-filter="mood"]');
+    if (moodSel && moodSel.value !== (filters.mood || "")) moodSel.value = filters.mood || "";
+    const tagSel = existing.querySelector('[data-search-filter="tag"]');
+    if (tagSel && tagSel.value !== (filters.tag || "")) tagSel.value = filters.tag || "";
+    const fromIn = existing.querySelector('[data-search-filter="from_date"]');
+    if (fromIn && fromIn.value !== (filters.from_date || "")) fromIn.value = filters.from_date || "";
+    const toIn = existing.querySelector('[data-search-filter="to_date"]');
+    if (toIn && toIn.value !== (filters.to_date || "")) toIn.value = filters.to_date || "";
+    if (existingResults) fillResults(existingResults);
     return;
   }
 
   container.innerHTML = "";
+  container.__searchActiveIdx = 0;
+
   const backdrop = el("div", "search-modal-backdrop");
+  backdrop.dataset.logModal = "search";
   const sheet = el("div", "search-modal-sheet");
   sheet.setAttribute("role", "dialog");
   sheet.setAttribute("aria-modal", "true");
@@ -1531,9 +1956,12 @@ export function renderSearchModal(container, state, callbacks = {}) {
   const input = document.createElement("input");
   input.type = "text";
   input.className = "search-modal-input";
-  input.placeholder = "Search entries…";
+  input.placeholder = "Search entries, places, tags…";
   input.value = state.searchQuery || "";
-  input.addEventListener("input", () => callbacks.onQueryChange?.(input.value));
+  input.addEventListener("input", () => {
+    container.__searchActiveIdx = 0;
+    container.__searchCallbacks?.onQueryChange?.(input.value);
+  });
   bar.appendChild(input);
 
   const closeBtn = el("button", "icon-btn");
@@ -1543,11 +1971,169 @@ export function renderSearchModal(container, state, callbacks = {}) {
   bar.appendChild(closeBtn);
   sheet.appendChild(bar);
 
+  // Structured Filter Bar
+  const filterRow = el("div", "search-filters-bar");
+
+  const starBtn = el(
+    "button",
+    `filter-pill-btn${filters.starred_only ? " is-active" : ""}`
+  );
+  starBtn.type = "button";
+  starBtn.dataset.searchFilter = "starred";
+  starBtn.innerHTML = `${icon("star", "tiny-icon")}<span>Starred</span>`;
+  starBtn.addEventListener("click", () => {
+    container.__searchActiveIdx = 0;
+    container.__searchCallbacks?.onFilterChange?.({
+      starred_only: !state.searchFilters?.starred_only,
+    });
+  });
+  filterRow.appendChild(starBtn);
+
+  const nbSel = document.createElement("select");
+  nbSel.className = "filter-pill-select";
+  nbSel.dataset.searchFilter = "notebook";
+  nbSel.setAttribute("aria-label", "Filter search by notebook");
+  nbSel.appendChild(Object.assign(document.createElement("option"), { value: "", textContent: "All notebooks" }));
+  for (const nb of state.notebooks || []) {
+    const opt = document.createElement("option");
+    opt.value = nb.id;
+    opt.textContent = nb.name;
+    if (filters.notebook_id === nb.id) opt.selected = true;
+    nbSel.appendChild(opt);
+  }
+  nbSel.addEventListener("change", () => {
+    container.__searchActiveIdx = 0;
+    container.__searchCallbacks?.onFilterChange?.({ notebook_id: nbSel.value });
+  });
+  filterRow.appendChild(nbSel);
+
+  const moodSel = document.createElement("select");
+  moodSel.className = "filter-pill-select";
+  moodSel.dataset.searchFilter = "mood";
+  moodSel.setAttribute("aria-label", "Filter search by mood");
+  moodSel.appendChild(Object.assign(document.createElement("option"), { value: "", textContent: "Any mood" }));
+  for (const m of [
+    "reflective",
+    "calm",
+    "grateful",
+    "energized",
+    "melancholic",
+    "curious",
+    "restless",
+    "joyful",
+  ]) {
+    const opt = document.createElement("option");
+    opt.value = m;
+    opt.textContent = m;
+    if (filters.mood === m) opt.selected = true;
+    moodSel.appendChild(opt);
+  }
+  moodSel.addEventListener("change", () => {
+    container.__searchActiveIdx = 0;
+    container.__searchCallbacks?.onFilterChange?.({ mood: moodSel.value });
+  });
+  filterRow.appendChild(moodSel);
+
+  if ((state.tags || []).length > 0) {
+    const tagSel = document.createElement("select");
+    tagSel.className = "filter-pill-select";
+    tagSel.dataset.searchFilter = "tag";
+    tagSel.setAttribute("aria-label", "Filter search by tag");
+    tagSel.appendChild(Object.assign(document.createElement("option"), { value: "", textContent: "Any tag" }));
+    for (const t of state.tags || []) {
+      const opt = document.createElement("option");
+      opt.value = t.tag;
+      opt.textContent = `#${t.tag}`;
+      if (filters.tag === t.tag) opt.selected = true;
+      tagSel.appendChild(opt);
+    }
+    tagSel.addEventListener("change", () => {
+      container.__searchActiveIdx = 0;
+      container.__searchCallbacks?.onFilterChange?.({ tag: tagSel.value });
+    });
+    filterRow.appendChild(tagSel);
+  }
+
+  const fromInput = document.createElement("input");
+  fromInput.type = "date";
+  fromInput.className = "filter-pill-date";
+  fromInput.dataset.searchFilter = "from_date";
+  fromInput.title = "From date";
+  fromInput.setAttribute("aria-label", "From date");
+  fromInput.value = filters.from_date || "";
+  fromInput.addEventListener("change", () => {
+    container.__searchActiveIdx = 0;
+    container.__searchCallbacks?.onFilterChange?.({ from_date: fromInput.value });
+  });
+
+  const toInput = document.createElement("input");
+  toInput.type = "date";
+  toInput.className = "filter-pill-date";
+  toInput.dataset.searchFilter = "to_date";
+  toInput.title = "To date";
+  toInput.setAttribute("aria-label", "To date");
+  toInput.value = filters.to_date || "";
+  toInput.addEventListener("change", () => {
+    container.__searchActiveIdx = 0;
+    container.__searchCallbacks?.onFilterChange?.({ to_date: toInput.value });
+  });
+
+  const resetBtn = el("button", "link-clear-btn", "Reset");
+  resetBtn.type = "button";
+  resetBtn.addEventListener("click", () => {
+    input.value = "";
+    container.__searchActiveIdx = 0;
+    container.__searchCallbacks?.onResetSearch?.();
+  });
+
+  filterRow.append(fromInput, toInput, resetBtn);
+  sheet.appendChild(filterRow);
+
   const resultsList = el("div", "search-results-list");
   fillResults(resultsList);
   sheet.appendChild(resultsList);
 
-  const close = bindModalEscape(container, backdrop, callbacks.onClose);
+  const close = bindModalEscape(container, backdrop, () =>
+    container.__searchCallbacks?.onClose?.()
+  );
+
+  sheet.addEventListener("keydown", (ev) => {
+    const curHits = container.__searchHits || [];
+    if (!curHits.length) return;
+    if (ev.key === "ArrowDown") {
+      ev.preventDefault();
+      container.__searchActiveIdx =
+        ((container.__searchActiveIdx || 0) + 1) % curHits.length;
+      const cards = resultsList.querySelectorAll(".search-hit-card");
+      cards.forEach((c, i) => {
+        const active = i === container.__searchActiveIdx;
+        c.classList.toggle("is-selected", active);
+        if (active) c.scrollIntoView({ block: "nearest" });
+      });
+    } else if (ev.key === "ArrowUp") {
+      ev.preventDefault();
+      container.__searchActiveIdx =
+        ((container.__searchActiveIdx || 0) - 1 + curHits.length) % curHits.length;
+      const cards = resultsList.querySelectorAll(".search-hit-card");
+      cards.forEach((c, i) => {
+        const active = i === container.__searchActiveIdx;
+        c.classList.toggle("is-selected", active);
+        if (active) c.scrollIntoView({ block: "nearest" });
+      });
+    } else if (
+      ev.key === "Enter" &&
+      document.activeElement?.tagName !== "BUTTON"
+    ) {
+      ev.preventDefault();
+      const chosen = curHits[container.__searchActiveIdx || 0];
+      const summary = chosen?.summary || chosen;
+      if (summary?.id) {
+        container.__searchCallbacks?.onSelectEntry?.(summary.id);
+        close();
+      }
+    }
+  });
+
   closeBtn.addEventListener("click", close);
   backdrop.addEventListener("click", (ev) => {
     if (ev.target === backdrop) close();
@@ -1683,12 +2269,35 @@ export function renderMigrationModal(container, state, callbacks = {}) {
   sheet.appendChild(header);
 
   const body = el("div", "modal-body");
-  const cols = el("div", "migration-columns");
+
+  const optionsBar = el("div", "migration-options-bar");
+  const nbField = el("label", "migration-target-field");
+  nbField.appendChild(el("span", "small-caps-meta", "Target Notebook"));
+  const nbSelect = document.createElement("select");
+  nbSelect.className = "editorial-select";
+  nbSelect.setAttribute("aria-label", "Target notebook for import");
+  nbSelect.appendChild(
+    Object.assign(document.createElement("option"), {
+      value: "",
+      textContent: "Default notebook",
+    })
+  );
+  for (const nb of state.notebooks || []) {
+    const opt = document.createElement("option");
+    opt.value = nb.id;
+    opt.textContent = nb.name;
+    if (state.selectedNotebookId === nb.id) opt.selected = true;
+    nbSelect.appendChild(opt);
+  }
+  nbField.appendChild(nbSelect);
 
   const dryLabel = el("label", "dry-run-toggle");
   const dryCheck = document.createElement("input");
   dryCheck.type = "checkbox";
   dryLabel.append(dryCheck, el("span", "", "Dry run (audit without writing files)"));
+  optionsBar.append(nbField, dryLabel);
+
+  const cols = el("div", "migration-columns");
 
   // Day One Panel
   const dPanel = el("section", "migration-panel");
@@ -1702,14 +2311,21 @@ export function renderMigrationModal(container, state, callbacks = {}) {
   );
 
   const dFileLabel = el("label", "btn-editorial btn-sage upload-btn-label");
-  dFileLabel.innerHTML = `${icon("upload")}<span>Upload Day One .zip</span>`;
+  dFileLabel.innerHTML = `${icon("upload")}<span>Upload Day One .zip / .json</span>`;
   const dFileInput = document.createElement("input");
   dFileInput.type = "file";
-  dFileInput.accept = ".zip";
+  dFileInput.accept = ".zip,.json";
   dFileInput.className = "sr-only";
   dFileInput.addEventListener("change", () => {
     const file = dFileInput.files?.[0];
-    if (file) container.__migrationCallbacks?.onImportDayOneFile?.(file);
+    dFileInput.value = "";
+    if (file) {
+      container.__migrationCallbacks?.onImportDayOneFile?.(
+        file,
+        dryCheck.checked,
+        nbSelect.value || null
+      );
+    }
   });
   dFileLabel.appendChild(dFileInput);
   dPanel.appendChild(dFileLabel);
@@ -1725,7 +2341,13 @@ export function renderMigrationModal(container, state, callbacks = {}) {
   dRunBtn.disabled = Boolean(state.migrationLoading);
   dRunBtn.addEventListener("click", () => {
     const p = dInput.value.trim();
-    if (p) container.__migrationCallbacks?.onImportDayOnePath?.(p, dryCheck.checked);
+    if (p) {
+      container.__migrationCallbacks?.onImportDayOnePath?.(
+        p,
+        dryCheck.checked,
+        nbSelect.value || null
+      );
+    }
   });
   dPathRow.append(dInput, dRunBtn);
   dPanel.appendChild(dPathRow);
@@ -1743,14 +2365,21 @@ export function renderMigrationModal(container, state, callbacks = {}) {
   );
 
   const nFileLabel = el("label", "btn-editorial btn-ghost upload-btn-label");
-  nFileLabel.innerHTML = `${icon("upload")}<span>Upload Notion .zip</span>`;
+  nFileLabel.innerHTML = `${icon("upload")}<span>Upload Notion .zip / .json</span>`;
   const nFileInput = document.createElement("input");
   nFileInput.type = "file";
-  nFileInput.accept = ".zip";
+  nFileInput.accept = ".zip,.json";
   nFileInput.className = "sr-only";
   nFileInput.addEventListener("change", () => {
     const file = nFileInput.files?.[0];
-    if (file) container.__migrationCallbacks?.onImportNotionFile?.(file);
+    nFileInput.value = "";
+    if (file) {
+      container.__migrationCallbacks?.onImportNotionFile?.(
+        file,
+        dryCheck.checked,
+        nbSelect.value || null
+      );
+    }
   });
   nFileLabel.appendChild(nFileInput);
   nPanel.appendChild(nFileLabel);
@@ -1766,14 +2395,20 @@ export function renderMigrationModal(container, state, callbacks = {}) {
   nRunBtn.disabled = Boolean(state.migrationLoading);
   nRunBtn.addEventListener("click", () => {
     const p = nInput.value.trim();
-    if (p) container.__migrationCallbacks?.onImportNotionPath?.(p, dryCheck.checked);
+    if (p) {
+      container.__migrationCallbacks?.onImportNotionPath?.(
+        p,
+        dryCheck.checked,
+        nbSelect.value || null
+      );
+    }
   });
   nPathRow.append(nInput, nRunBtn);
   nPanel.appendChild(nPathRow);
   cols.appendChild(nPanel);
 
   body.appendChild(cols);
-  body.appendChild(dryLabel);
+  body.appendChild(optionsBar);
 
   const dynRegion = document.createElement("div");
   dynRegion.dataset.region = "migration-dynamic";
@@ -2429,6 +3064,273 @@ export function renderBackupModal(container, state, callbacks = {}) {
   closeBtn.addEventListener("click", () => container.__backupClose?.());
   backdrop.addEventListener("click", (ev) => {
     if (ev.target === backdrop) container.__backupClose?.();
+  });
+
+  container.appendChild(backdrop);
+}
+
+/**
+ * Render the Journal Insights, Writing Streaks, and Local Vault Maintenance modal.
+ * @param {HTMLElement} container
+ * @param {object} state
+ * @param {object} callbacks
+ */
+export function renderInsightsModal(container, state, callbacks = {}) {
+  container.innerHTML = "";
+
+  const stats = state.stats || {};
+  const entries = state.entries || [];
+
+  const backdrop = el("div", "editorial-modal-backdrop");
+  backdrop.dataset.logModal = "insights";
+  const sheet = el("div", "editorial-modal-sheet wide");
+  sheet.setAttribute("role", "dialog");
+  sheet.setAttribute("aria-modal", "true");
+  sheet.setAttribute("aria-label", "Journal Insights & Vault");
+
+  const header = el("header", "modal-header");
+  const titleGroup = el("div", "modal-title-group");
+  const titleIcon = el("span", "modal-title-icon");
+  titleIcon.innerHTML = icon("chart");
+  titleGroup.appendChild(titleIcon);
+
+  const titleText = el("div");
+  titleText.appendChild(el("span", "small-caps-meta", "Archive Ledger"));
+  titleText.appendChild(el("h2", "modal-serif-heading", "Journal Insights & Vault"));
+  titleGroup.appendChild(titleText);
+  header.appendChild(titleGroup);
+
+  const closeBtn = el("button", "icon-btn");
+  closeBtn.type = "button";
+  closeBtn.setAttribute("aria-label", "Close insights");
+  closeBtn.innerHTML = icon("close");
+  header.appendChild(closeBtn);
+  sheet.appendChild(header);
+
+  const body = el("div", "modal-body");
+
+  // KPI summary row
+  const kpiGrid = el("div", "insights-kpi-grid");
+  const kpis = [
+    ["Current Streak", `${stats.current_streak_days ?? 0}d`, "is-sage"],
+    ["Longest Streak", `${stats.longest_streak_days ?? 0}d`, ""],
+    ["This Month", String(stats.entries_this_month ?? 0), ""],
+    ["Total Entries", String(stats.total_entries ?? entries.length), ""],
+    ["Total Words", Number(stats.total_words ?? 0).toLocaleString(), ""],
+    [
+      "Media",
+      `${stats.total_photos ?? 0} photos · ${stats.total_audio_memos ?? 0} voice`,
+      "",
+    ],
+  ];
+  for (const [label, num, mod] of kpis) {
+    const card = el("div", `report-kpi ${mod}`.trim());
+    card.appendChild(el("span", "kpi-num", num));
+    card.appendChild(el("span", "small-caps-meta", label));
+    kpiGrid.appendChild(card);
+  }
+  body.appendChild(kpiGrid);
+
+  // Mood distribution & Top Tags side by side
+  const breakdownCols = el("div", "insights-breakdown-cols");
+
+  // Moods
+  const moodCounts = new Map();
+  for (const e of entries) {
+    if (e.mood) {
+      moodCounts.set(e.mood, (moodCounts.get(e.mood) || 0) + 1);
+    }
+  }
+  const sortedMoods = [...moodCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6);
+  const moodBox = el("section", "migration-panel");
+  moodBox.appendChild(el("h3", "panel-serif-title", "Mood Cadence"));
+  if (sortedMoods.length === 0) {
+    moodBox.appendChild(el("p", "panel-note", "Add moods to entries to track emotional cadence over time."));
+  } else {
+    const maxM = sortedMoods[0][1] || 1;
+    const bars = el("div", "insights-bars-list");
+    for (const [mood, cnt] of sortedMoods) {
+      const row = el("div", "insights-bar-row");
+      const meta = el("div", "insights-bar-meta");
+      meta.append(el("span", "", mood), el("span", "small-caps-meta", String(cnt)));
+      const track = el("div", "insights-bar-track");
+      const fill = el("div", "insights-bar-fill");
+      fill.style.width = `${Math.max(8, Math.round((cnt / maxM) * 100))}%`;
+      track.appendChild(fill);
+      row.append(meta, track);
+      bars.appendChild(row);
+    }
+    moodBox.appendChild(bars);
+  }
+  breakdownCols.appendChild(moodBox);
+
+  // Top Tags
+  const topTags = (stats.top_tags || state.tags || []).slice(0, 6);
+  const tagBox = el("section", "migration-panel");
+  tagBox.appendChild(el("h3", "panel-serif-title", "Recurring Themes"));
+  if (topTags.length === 0) {
+    tagBox.appendChild(el("p", "panel-note", "Tag your entries to surface recurring themes here."));
+  } else {
+    const maxT = topTags[0].count || 1;
+    const bars = el("div", "insights-bars-list");
+    for (const item of topTags) {
+      const row = el("button", "insights-bar-row is-clickable");
+      row.type = "button";
+      const meta = el("div", "insights-bar-meta");
+      meta.append(el("span", "", `#${item.tag}`), el("span", "small-caps-meta", String(item.count)));
+      const track = el("div", "insights-bar-track");
+      const fill = el("div", "insights-bar-fill is-terracotta");
+      fill.style.width = `${Math.max(8, Math.round((item.count / maxT) * 100))}%`;
+      track.appendChild(fill);
+      row.append(meta, track);
+      row.addEventListener("click", () => {
+        callbacks.onSelectTag?.(item.tag);
+        callbacks.onClose?.();
+      });
+      bars.appendChild(row);
+    }
+    tagBox.appendChild(bars);
+  }
+  breakdownCols.appendChild(tagBox);
+  body.appendChild(breakdownCols);
+
+  // Local Vault Maintenance section
+  const vaultPanel = el("section", "migration-panel");
+  vaultPanel.appendChild(el("h3", "panel-serif-title", "Local Markdown Vault"));
+  vaultPanel.appendChild(
+    el("p", "mono-cell muted-cell", stats.vault_path || "~/Personal/JournalVault")
+  );
+  vaultPanel.appendChild(
+    el(
+      "p",
+      "panel-note",
+      "Every entry is stored as plain UTF-8 Markdown with YAML frontmatter. If you edit files externally, refresh or rebuild the SQLite FTS5 search index below."
+    )
+  );
+
+  const vaultActions = el("div", "backup-action-row");
+  const openBtn = el("button", "btn-editorial small");
+  openBtn.type = "button";
+  openBtn.innerHTML = `${icon("folder", "tiny-icon")}<span>Open Vault Folder</span>`;
+  openBtn.addEventListener("click", () => callbacks.onOpenVaultFolder?.());
+
+  const syncBtn = el("button", "btn-editorial btn-sage small");
+  syncBtn.type = "button";
+  syncBtn.disabled = Boolean(state.vaultSyncing);
+  syncBtn.innerHTML = `${icon("refresh", "tiny-icon")}<span>${
+    state.vaultSyncing ? "Syncing…" : "Sync External Edits"
+  }</span>`;
+  syncBtn.addEventListener("click", () => callbacks.onSyncVault?.(false));
+
+  const rebuildBtn = el("button", "btn-editorial btn-ghost small");
+  rebuildBtn.type = "button";
+  rebuildBtn.disabled = Boolean(state.vaultSyncing);
+  rebuildBtn.innerHTML = `${icon("sliders", "tiny-icon")}<span>Rebuild Search Index</span>`;
+  rebuildBtn.addEventListener("click", () => callbacks.onSyncVault?.(true));
+
+  vaultActions.append(openBtn, syncBtn, rebuildBtn);
+  vaultPanel.appendChild(vaultActions);
+  body.appendChild(vaultPanel);
+
+  sheet.appendChild(body);
+  backdrop.appendChild(sheet);
+
+  const close = bindModalEscape(container, backdrop, callbacks.onClose);
+  closeBtn.addEventListener("click", close);
+  backdrop.addEventListener("click", (ev) => {
+    if (ev.target === backdrop) close();
+  });
+
+  container.appendChild(backdrop);
+}
+
+/**
+ * Render the Keyboard Shortcuts reference modal.
+ * @param {HTMLElement} container
+ * @param {object} callbacks
+ */
+export function renderShortcutsModal(container, callbacks = {}) {
+  container.innerHTML = "";
+
+  const backdrop = el("div", "editorial-modal-backdrop");
+  backdrop.dataset.logModal = "shortcuts";
+  const sheet = el("div", "editorial-modal-sheet");
+  sheet.setAttribute("role", "dialog");
+  sheet.setAttribute("aria-modal", "true");
+  sheet.setAttribute("aria-label", "Keyboard Shortcuts");
+
+  const header = el("header", "modal-header");
+  const titleGroup = el("div", "modal-title-group");
+  const titleIcon = el("span", "modal-title-icon");
+  titleIcon.innerHTML = icon("keyboard");
+  titleGroup.appendChild(titleIcon);
+
+  const titleText = el("div");
+  titleText.appendChild(el("span", "small-caps-meta", "Reference"));
+  titleText.appendChild(el("h2", "modal-serif-heading", "Keyboard Shortcuts"));
+  titleGroup.appendChild(titleText);
+  header.appendChild(titleGroup);
+
+  const closeBtn = el("button", "icon-btn");
+  closeBtn.type = "button";
+  closeBtn.setAttribute("aria-label", "Close keyboard shortcuts");
+  closeBtn.innerHTML = icon("close");
+  header.appendChild(closeBtn);
+  sheet.appendChild(header);
+
+  const body = el("div", "modal-body");
+  const groups = [
+    {
+      title: "Navigation & Workspace",
+      items: [
+        ["Ctrl + K", "Search & filter entries"],
+        ["Ctrl + F", "Find in current entry"],
+        ["Ctrl + N", "Start a new entry"],
+        ["Ctrl + S", "Save current entry immediately"],
+        ["Ctrl + E", "Toggle Write / Read mode"],
+        ["Ctrl + \\", "Toggle sidebar (Focus mode)"],
+        ["Alt + Left / Right", "Previous / Next entry"],
+        ["Ctrl + 1 / 2 / 3 / 4", "Editor / All Entries / Calendar / On This Day"],
+        ["Ctrl + /", "Show keyboard shortcuts"],
+      ],
+    },
+    {
+      title: "Writing & Markdown",
+      items: [
+        ["/", "Open inline slash command palette"],
+        ["Ctrl + B", "Bold selection"],
+        ["Ctrl + I", "Italic selection"],
+        ["Ctrl + Shift + X", "Strikethrough selection"],
+        ["Ctrl + Shift + C", "Inline code selection"],
+        ["Ctrl + Shift + L", "Insert Markdown link"],
+        ["Ctrl + Shift + T", "Toggle checklist item on line"],
+        ["Tab / Shift + Tab", "Indent / outdent lines"],
+        ["Ctrl + V (image)", "Paste image from clipboard as Polaroid"],
+      ],
+    },
+  ];
+
+  for (const grp of groups) {
+    const sec = el("section", "shortcuts-group");
+    sec.appendChild(el("span", "small-caps-meta", grp.title));
+    const list = el("div", "shortcuts-list");
+    for (const [keys, desc] of grp.items) {
+      const row = el("div", "shortcut-row");
+      row.appendChild(el("span", "shortcut-desc", desc));
+      row.appendChild(el("kbd", "shortcut-kbd", keys));
+      list.appendChild(row);
+    }
+    sec.appendChild(list);
+    body.appendChild(sec);
+  }
+
+  sheet.appendChild(body);
+  backdrop.appendChild(sheet);
+
+  const close = bindModalEscape(container, backdrop, callbacks.onClose);
+  closeBtn.addEventListener("click", close);
+  backdrop.addEventListener("click", (ev) => {
+    if (ev.target === backdrop) close();
   });
 
   container.appendChild(backdrop);

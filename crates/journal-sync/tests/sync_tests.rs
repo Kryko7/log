@@ -95,6 +95,7 @@ fn age_encrypt_decrypt_restore_round_trip() {
             stamps: vec![],
             photos: vec![photo.clone()],
             audio: vec![],
+            cover_asset: None,
             body: format!("{secret_phrase}.\n\n![Veranda]({})", photo.url),
         })
         .expect("save entry");
@@ -186,6 +187,7 @@ async fn gdrive_sync_offline_gracefully_reports_local_backup() {
             stamps: vec![],
             photos: vec![],
             audio: vec![],
+            cover_asset: None,
             body: "Offline backup check.".into(),
         })
         .unwrap();
@@ -251,6 +253,7 @@ async fn daily_context_loads_calendar_cache_and_on_this_day_count() {
             stamps: vec![],
             photos: vec![],
             audio: vec![],
+            cover_asset: None,
             body: "Autumn tea by the window.".into(),
         })
         .unwrap();
@@ -404,6 +407,7 @@ async fn sync_gdrive_with_target_reuses_existing_archive_and_mirrors_destination
             stamps: vec![],
             photos: vec![],
             audio: vec![],
+            cover_asset: None,
             body: "Verify no duplicate archive is created.".into(),
         })
         .unwrap();

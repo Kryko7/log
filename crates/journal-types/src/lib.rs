@@ -212,6 +212,9 @@ pub struct EntryFrontmatter {
     pub photos: Vec<PolaroidMeta>,
     #[serde(default)]
     pub audio: Vec<VoiceMemoMeta>,
+    /// Optional watercolor wash or uploaded photograph banner for this entry sheet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cover_asset: Option<String>,
     /// Outgoing `[[wikilink]]` titles or IDs referenced inside the prose.
     #[serde(default)]
     pub links: Vec<String>,
@@ -237,6 +240,7 @@ impl EntryFrontmatter {
             stamps: Vec::new(),
             photos: Vec::new(),
             audio: Vec::new(),
+            cover_asset: None,
             links: Vec::new(),
         }
     }
@@ -656,7 +660,7 @@ pub struct AssetManifest {
 }
 
 /// Payload for creating or updating a journal entry via HTTP API.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SaveEntryRequest {
     #[serde(default)]
     pub id: Option<Uuid>,
@@ -681,7 +685,35 @@ pub struct SaveEntryRequest {
     pub photos: Vec<PolaroidMeta>,
     #[serde(default)]
     pub audio: Vec<VoiceMemoMeta>,
+    #[serde(default)]
+    pub cover_asset: Option<String>,
     pub body: String,
+}
+
+/// Request to create or update a custom Markdown template in `templates/`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SaveTemplateRequest {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub default_tags: Vec<String>,
+    #[serde(default)]
+    pub default_mood: Option<String>,
+    pub body_markdown: String,
+    #[serde(default)]
+    pub prompts: Vec<String>,
+}
+
+/// Summary returned when reconciling or rebuilding the local vault index.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncVaultResponse {
+    pub indexed_count: usize,
+    pub full_rebuild: bool,
 }
 
 /// Request to import a Day One JSON/ZIP export into the vault.
@@ -852,6 +884,7 @@ mod tests {
             stamps: vec![stamp.clone()],
             photos: vec![polaroid.clone()],
             audio: vec![voice.clone()],
+            cover_asset: Some("/assets/covers/rainy-tea-desk.png".into()),
             links: vec!["Autumn Notes".into()],
         };
         let backlink = BacklinkRef {
@@ -1051,6 +1084,7 @@ mod tests {
             stamps: vec![],
             photos: vec![],
             audio: vec![],
+            cover_asset: Some("/assets/covers/botanical-fern-wash.png".into()),
             body: "Hello ink.".into(),
         };
         let import_do = ImportDayOneRequest {

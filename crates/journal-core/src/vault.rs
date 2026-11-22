@@ -4,12 +4,12 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 
-use chrono::{Datelike, Utc};
+use chrono::{Datelike, Local, Utc};
 use journal_types::{
     BacklinkRef, CalendarDaySummary, CreateNotebookRequest, DeleteEntryResponse,
     DeleteNotebookResponse, Entry, EntryFrontmatter, EntrySummary, Notebook, OnThisDayGroup,
-    PolaroidMeta, SaveEntryRequest, SearchHit, SearchQuery, TagCount, Template,
-    UpdateNotebookRequest, VaultStats, VoiceMemoMeta,
+    PolaroidMeta, SaveEntryRequest, SaveTemplateRequest, SearchHit, SearchQuery, TagCount,
+    Template, UpdateNotebookRequest, VaultStats, VoiceMemoMeta,
 };
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use rusqlite::Connection;
@@ -546,6 +546,7 @@ impl Vault {
             stamps: req.stamps,
             photos: req.photos,
             audio: req.audio,
+            cover_asset: req.cover_asset.filter(|c| !c.trim().is_empty()),
             links: Vec::new(),
         };
 
@@ -684,7 +685,7 @@ impl Vault {
 
     /// Compute overall vault statistics, streaks, and top tags.
     pub fn get_vault_stats(&self) -> Result<VaultStats> {
-        let today = Utc::now().date_naive();
+        let today = Local::now().date_naive();
         let conn = self.conn.lock().map_err(|_| VaultError::LockPoisoned)?;
         let total_notebooks: i64 =
             conn.query_row("SELECT COUNT(*) FROM notebooks", [], |row| row.get(0))?;
@@ -728,6 +729,16 @@ impl Vault {
     /// List editorial Markdown templates stored in `templates/`.
     pub fn list_templates(&self) -> Result<Vec<Template>> {
         templates::load_templates(&self.root.join("templates"))
+    }
+
+    /// Save or update a custom editorial Markdown template in `templates/`.
+    pub fn save_template(&self, req: SaveTemplateRequest) -> Result<Template> {
+        templates::save_template(&self.root.join("templates"), req)
+    }
+
+    /// Delete a template by ID from `templates/`.
+    pub fn delete_template(&self, id: &str) -> Result<bool> {
+        templates::delete_template(&self.root.join("templates"), id)
     }
 
     fn read_notebooks_file(&self) -> Result<Vec<Notebook>> {

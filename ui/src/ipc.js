@@ -191,6 +191,7 @@ export const api = {
       stamps: Array.isArray(req.stamps) ? req.stamps : [],
       photos: Array.isArray(req.photos) ? req.photos : [],
       audio: Array.isArray(req.audio) ? req.audio : [],
+      cover_asset: req.cover_asset ?? null,
       body: req.body ?? "",
     }),
 
@@ -249,6 +250,35 @@ export const api = {
 
   listTemplates: () => invokeCmd("list_templates", {}),
 
+  saveTemplate: (req = {}) =>
+    invokeCmd("save_template", {
+      id: req.id ?? null,
+      name: req.name ?? "",
+      description: req.description ?? null,
+      category: req.category ?? null,
+      default_tags: Array.isArray(req.default_tags) ? req.default_tags : [],
+      default_mood: req.default_mood ?? null,
+      body_markdown: req.body_markdown ?? "",
+      prompts: Array.isArray(req.prompts) ? req.prompts : [],
+    }),
+
+  deleteTemplate: (id) =>
+    invokeCmd("delete_template", {
+      id: requireId(id, "template id"),
+    }),
+
+  syncVault: (fullRebuild = false) =>
+    invokeCmd("sync_vault", {
+      full_rebuild: Boolean(fullRebuild),
+    }),
+
+  openVaultFolder: () => invokeCmd("open_vault_folder", {}),
+
+  openExternalUrl: (url) =>
+    invokeCmd("open_external_url", {
+      url: String(url ?? ""),
+    }),
+
   getDailyContext: (params = {}) =>
     invokeCmd("get_daily_context", {
       date: params?.date ?? null,
@@ -271,6 +301,21 @@ export const api = {
       notebook_id: req.notebook_id ?? null,
       dry_run: Boolean(req.dry_run),
     }),
+
+  importArchiveUpload: async (sourceKind, fileOrBytes, opts = {}) => {
+    const data_base64 = await inputToBase64(fileOrBytes);
+    const filename =
+      opts.filename ||
+      (fileOrBytes && typeof fileOrBytes.name === "string" && fileOrBytes.name) ||
+      `${sourceKind}-export.zip`;
+    return invokeCmd("import_archive_upload", {
+      source_kind: String(sourceKind || ""),
+      filename,
+      data_base64,
+      notebook_id: opts.notebook_id ?? null,
+      dry_run: Boolean(opts.dry_run),
+    });
+  },
 
   listBackups: () => invokeCmd("list_backups", {}),
 

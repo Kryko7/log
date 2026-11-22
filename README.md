@@ -26,7 +26,7 @@ A tactile, local-first personal journal desktop application built completely wit
 | `crates/journal-import` | Primary Day One (`.zip` / `.json`) importer and Notion delta importer with automatic Day One deduplication and audit reports. |
 | `crates/journal-sync` | Pure-Rust `age` backup encryption/decryption, Google Drive sync, and daily weather + read-only Google Calendar prompt context. |
 | `ui/` | Zero-framework modular ES-module frontend (`index.html`, `styles/main.css`, `src/*.js`, `assets/`) bundled into Tauri's `frontendDist`. |
-| `src-tauri/` | Pure Tauri v2 desktop application & CLI (`log-journal` binary), `vault://` custom URI media protocol, and 23 `#[tauri::command]` IPC handlers. |
+| `src-tauri/` | Pure Tauri v2 desktop application & CLI (`log-journal` binary), `vault://` custom URI media protocol, and 41 `#[tauri::command]` IPC handlers. |
 
 ## Quick Start (Arch Linux)
 
@@ -92,7 +92,7 @@ Global flag: `--vault <PATH>` (overrides `LOG_VAULT_DIR`; defaults to `~/Persona
 
 ## Tauri IPC & `vault://` Media Protocol
 
-- **35 IPC Commands**: `get_vault_stats`, `list_notebooks`, `create_notebook`, `update_notebook`, `delete_notebook`, `list_entries`, `get_entry`, `save_entry`, `delete_entry`, `search_entries`, `list_tags`, `get_calendar_month`, `get_on_this_day`, `get_backlinks`, `list_templates`, `get_daily_context`, `get_asset_manifest`, `import_dayone`, `import_notion`, `list_backups`, `create_backup`, `restore_backup`, `sync_gdrive`, `get_backup_config`, `save_backup_config`, `get_gdrive_status`, `connect_gdrive_rclone`, `connect_gdrive_oauth`, `save_gdrive_token`, `disconnect_gdrive`, `upload_photo`, `upload_audio`, `start_voice_recording`, `stop_voice_recording`, `cancel_voice_recording`.
+- **41 IPC Commands**: `get_vault_stats`, `list_notebooks`, `create_notebook`, `update_notebook`, `delete_notebook`, `list_entries`, `get_entry`, `save_entry`, `delete_entry`, `search_entries`, `list_tags`, `get_calendar_month`, `get_on_this_day`, `get_backlinks`, `list_templates`, `save_template`, `delete_template`, `sync_vault`, `open_vault_folder`, `open_external_url`, `get_daily_context`, `get_asset_manifest`, `import_dayone`, `import_notion`, `import_archive_upload`, `list_backups`, `create_backup`, `restore_backup`, `sync_gdrive`, `get_backup_config`, `save_backup_config`, `get_gdrive_status`, `connect_gdrive_rclone`, `connect_gdrive_oauth`, `save_gdrive_token`, `disconnect_gdrive`, `upload_photo`, `upload_audio`, `start_voice_recording`, `stop_voice_recording`, `cancel_voice_recording`.
 - **`vault://` Custom URI Protocol**: Streams `/vault-media/...` and `/vault-thumbs/...` directly from disk with path-traversal protection and proper `Content-Type` headers.
 
 ## Desktop Integration & Scripts

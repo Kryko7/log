@@ -297,6 +297,7 @@ export function renderSidebar(container, state, callbacks = {}) {
   // Navigation
   const totalEntries =
     state.stats?.total_entries ?? state.entries?.length ?? 0;
+  const starredCount = (state.entries || []).filter((e) => e.starred).length;
   const otdCount =
     state.onThisDayCount ??
     (state.onThisDayGroups || []).reduce(
@@ -311,6 +312,12 @@ export function renderSidebar(container, state, callbacks = {}) {
       label: "All Entries",
       iconName: "book",
       count: totalEntries,
+    },
+    {
+      key: "starred",
+      label: "Starred",
+      iconName: "star",
+      count: starredCount > 0 ? starredCount : null,
     },
     { key: "calendar", label: "Calendar", iconName: "calendar", count: null },
     {
@@ -330,8 +337,14 @@ export function renderSidebar(container, state, callbacks = {}) {
       item.key === "timeline"
         ? state.activeView === "timeline" &&
           !state.selectedNotebookId &&
-          !state.selectedTag
-        : state.activeView === item.key;
+          !state.selectedTag &&
+          !state.starredOnly
+        : item.key === "starred"
+          ? state.activeView === "timeline" &&
+            Boolean(state.starredOnly) &&
+            !state.selectedNotebookId &&
+            !state.selectedTag
+          : state.activeView === item.key;
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = `sidebar-nav-item${isNavActive ? " is-active" : ""}`;
@@ -437,7 +450,7 @@ export function renderSidebar(container, state, callbacks = {}) {
   const allNbBtn = document.createElement("button");
   allNbBtn.type = "button";
   allNbBtn.className = `sidebar-notebook-item${
-    isTimelineView && !state.selectedNotebookId && !state.selectedTag
+    isTimelineView && !state.selectedNotebookId && !state.selectedTag && !state.starredOnly
       ? " is-active"
       : ""
   }`;
@@ -747,6 +760,14 @@ export function renderSidebar(container, state, callbacks = {}) {
   backupBtn.appendChild(document.createTextNode("Backup"));
   backupBtn.addEventListener("click", () => callbacks.onOpenBackup?.());
 
+  const shortcutsBtn = document.createElement("button");
+  shortcutsBtn.type = "button";
+  shortcutsBtn.className = "sidebar-icon-btn";
+  shortcutsBtn.title = "Keyboard shortcuts (Ctrl+/)";
+  shortcutsBtn.setAttribute("aria-label", "Keyboard shortcuts");
+  shortcutsBtn.appendChild(iconEl("keyboard", "log-icon"));
+  shortcutsBtn.addEventListener("click", () => callbacks.onOpenShortcuts?.());
+
   const themeBtn = document.createElement("button");
   themeBtn.type = "button";
   themeBtn.className = "sidebar-icon-btn";
@@ -757,15 +778,27 @@ export function renderSidebar(container, state, callbacks = {}) {
   themeBtn.appendChild(iconEl(state.nightMode ? "sun" : "moon", "log-icon"));
   themeBtn.addEventListener("click", () => callbacks.onToggleTheme?.());
 
-  utilRow.append(importBtn, backupBtn, themeBtn);
+  const utilIcons = document.createElement("div");
+  utilIcons.className = "sidebar-utility-icons";
+  utilIcons.append(shortcutsBtn, themeBtn);
 
-  const statsLine = document.createElement("div");
-  statsLine.className = "sidebar-stats-line";
+  utilRow.append(importBtn, backupBtn, utilIcons);
+
+  const statsBtn = document.createElement("button");
+  statsBtn.type = "button";
+  statsBtn.className = "sidebar-stats-btn";
+  statsBtn.title = "Open Journal Insights & Vault tools";
   const totalWords = Number(state.stats?.total_words ?? 0);
-  statsLine.textContent = `${totalEntries} ${
+  const streak = Number(state.stats?.current_streak_days ?? 0);
+  const streakSuffix = streak > 0 ? ` · ${streak}d streak` : "";
+  statsBtn.appendChild(iconEl("chart", "tiny-icon"));
+  const statsText = document.createElement("span");
+  statsText.textContent = `${totalEntries} ${
     totalEntries === 1 ? "entry" : "entries"
-  } · ${totalWords.toLocaleString()} words`;
+  } · ${totalWords.toLocaleString()} words${streakSuffix}`;
+  statsBtn.appendChild(statsText);
+  statsBtn.addEventListener("click", () => callbacks.onOpenInsights?.());
 
-  footer.append(utilRow, statsLine);
+  footer.append(utilRow, statsBtn);
   container.appendChild(footer);
 }

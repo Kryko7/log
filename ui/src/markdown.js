@@ -1,4 +1,4 @@
-import { resolveVaultUrl } from "./ipc.js";
+import { api, isTauriRuntime, resolveVaultUrl } from "./ipc.js";
 import { icon } from "./icons.js";
 
 function isSafeHref(href) {
@@ -205,6 +205,12 @@ function appendInline(parent, text, ctx) {
             a.target = "_blank";
             a.rel = "noopener noreferrer";
             a.textContent = label;
+            if (isTauriRuntime() && /^(https?:|mailto:)/i.test(href)) {
+              a.addEventListener("click", (ev) => {
+                ev.preventDefault();
+                api.openExternalUrl(href).catch(() => {});
+              });
+            }
             parent.appendChild(a);
           } else {
             parent.appendChild(document.createTextNode(label));
@@ -215,14 +221,61 @@ function appendInline(parent, text, ctx) {
       }
     }
 
-    // Bold: **...**
-    if (src[i] === "*" && src[i + 1] === "*") {
-      const end = src.indexOf("**", i + 2);
+    // Bold + Italic: ***...***
+    if (src[i] === "*" && src[i + 1] === "*" && src[i + 2] === "*") {
+      const end = src.indexOf("***", i + 3);
+      if (end > i + 3) {
+        flushPlain();
+        const strong = document.createElement("strong");
+        const em = document.createElement("em");
+        appendInline(em, src.slice(i + 3, end), ctx);
+        strong.appendChild(em);
+        parent.appendChild(strong);
+        i = end + 3;
+        continue;
+      }
+    }
+
+    // Bold: **...** or __...__
+    if (
+      (src[i] === "*" && src[i + 1] === "*") ||
+      (src[i] === "_" && src[i + 1] === "_")
+    ) {
+      const delim = src.slice(i, i + 2);
+      const end = src.indexOf(delim, i + 2);
       if (end > i + 2) {
         flushPlain();
         const strong = document.createElement("strong");
         appendInline(strong, src.slice(i + 2, end), ctx);
         parent.appendChild(strong);
+        i = end + 2;
+        continue;
+      }
+    }
+
+    // Strikethrough: ~~...~~
+    if (src[i] === "~" && src[i + 1] === "~") {
+      const end = src.indexOf("~~", i + 2);
+      if (end > i + 2) {
+        flushPlain();
+        const del = document.createElement("del");
+        del.className = "entry-strikethrough";
+        appendInline(del, src.slice(i + 2, end), ctx);
+        parent.appendChild(del);
+        i = end + 2;
+        continue;
+      }
+    }
+
+    // Highlight: ==...==
+    if (src[i] === "=" && src[i + 1] === "=") {
+      const end = src.indexOf("==", i + 2);
+      if (end > i + 2) {
+        flushPlain();
+        const mark = document.createElement("mark");
+        mark.className = "entry-highlight";
+        appendInline(mark, src.slice(i + 2, end), ctx);
+        parent.appendChild(mark);
         i = end + 2;
         continue;
       }
@@ -241,6 +294,28 @@ function appendInline(parent, text, ctx) {
       }
     }
 
+    // Italic: _..._ (only at word boundary so snake_case is preserved)
+    if (
+      src[i] === "_" &&
+      src[i + 1] !== "_" &&
+      src[i + 1] !== " " &&
+      (i === 0 || !/[A-Za-z0-9]/.test(src[i - 1]))
+    ) {
+      const end = src.indexOf("_", i + 1);
+      if (
+        end > i + 1 &&
+        src[end - 1] !== " " &&
+        (end + 1 >= src.length || !/[A-Za-z0-9]/.test(src[end + 1]))
+      ) {
+        flushPlain();
+        const em = document.createElement("em");
+        appendInline(em, src.slice(i + 1, end), ctx);
+        parent.appendChild(em);
+        i = end + 1;
+        continue;
+      }
+    }
+
     plain += src[i];
     i += 1;
   }
@@ -248,7 +323,7 @@ function appendInline(parent, text, ctx) {
   flushPlain();
 }
 
-function makeFigure(alt, rawSrc) {
+function makeFigure(alt, rawSrc, onOpenImage = null) {
   if (!isSafeImageSrc(rawSrc)) {
     const p = document.createElement("p");
     p.className = "entry-paragraph muted-empty-note";
@@ -264,6 +339,10 @@ function makeFigure(alt, rawSrc) {
   img.alt = alt || "Journal figure";
   img.loading = "lazy";
   img.decoding = "async";
+  if (typeof onOpenImage === "function") {
+    img.style.cursor = "zoom-in";
+    img.addEventListener("click", () => onOpenImage(rawSrc, alt || ""));
+  }
   fig.appendChild(img);
 
   if (alt && alt.trim()) {
@@ -274,18 +353,34 @@ function makeFigure(alt, rawSrc) {
   return fig;
 }
 
+function splitTableRow(line) {
+  let s = line.trim();
+  if (s.startsWith("|")) s = s.slice(1);
+  if (s.endsWith("|")) s = s.slice(0, -1);
+  return s.split("|").map((c) => c.trim());
+}
+
+function isTableSeparatorLine(line) {
+  const s = line.trim();
+  if (!s.includes("-") || !s.includes("|")) return false;
+  const cells = splitTableRow(s);
+  return cells.length > 0 && cells.every((c) => /^:?-{3,}:?$/.test(c));
+}
+
 export function renderMarkdownReadView(
   container,
   bodyText,
   allEntries = [],
   onOpenEntry = null,
-  onToggleTodo = null
+  onToggleTodo = null,
+  onOpenImage = null
 ) {
   container.innerHTML = "";
   const ctx = {
     entryIndex: buildEntryIndex(allEntries),
     onOpenEntry,
     onToggleTodo,
+    onOpenImage,
   };
   const text = String(bodyText || "").replace(/\r\n/g, "\n");
   const lines = text.split("\n");
@@ -340,17 +435,62 @@ export function renderMarkdownReadView(
     // Standalone image: ![alt](src)
     const imgMatch = trimmed.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
     if (imgMatch) {
-      container.appendChild(makeFigure(imgMatch[1], imgMatch[2].trim()));
+      container.appendChild(makeFigure(imgMatch[1], imgMatch[2].trim(), ctx.onOpenImage));
       i += 1;
       continue;
     }
 
-    // Headings
-    const hMatch = raw.match(/^(#{1,3})\s+(.*)$/);
+    // Markdown Table
+    if (
+      raw.includes("|") &&
+      i + 1 < lines.length &&
+      isTableSeparatorLine(lines[i + 1])
+    ) {
+      const headers = splitTableRow(raw);
+      i += 2;
+      const bodyRows = [];
+      while (i < lines.length && lines[i].trim() && lines[i].includes("|")) {
+        bodyRows.push(splitTableRow(lines[i]));
+        i += 1;
+      }
+      const wrap = document.createElement("div");
+      wrap.className = "entry-table-wrap";
+      const table = document.createElement("table");
+      table.className = "entry-md-table";
+      const thead = document.createElement("thead");
+      const htr = document.createElement("tr");
+      for (const cell of headers) {
+        const th = document.createElement("th");
+        appendInline(th, cell, ctx);
+        htr.appendChild(th);
+      }
+      thead.appendChild(htr);
+      table.appendChild(thead);
+
+      if (bodyRows.length > 0) {
+        const tbody = document.createElement("tbody");
+        for (const r of bodyRows) {
+          const tr = document.createElement("tr");
+          for (let ci = 0; ci < headers.length; ci += 1) {
+            const td = document.createElement("td");
+            appendInline(td, r[ci] ?? "", ctx);
+            tr.appendChild(td);
+          }
+          tbody.appendChild(tr);
+        }
+        table.appendChild(tbody);
+      }
+      wrap.appendChild(table);
+      container.appendChild(wrap);
+      continue;
+    }
+
+    // Headings (h1 - h6)
+    const hMatch = raw.match(/^(#{1,6})\s+(.*)$/);
     if (hMatch) {
       const level = hMatch[1].length;
       const el = document.createElement(`h${level}`);
-      el.className = `entry-h${level}`;
+      el.className = `entry-h${Math.min(level, 4)}`;
       appendInline(el, hMatch[2], ctx);
       container.appendChild(el);
       i += 1;
@@ -470,7 +610,8 @@ export function renderMarkdownReadView(
         curTrim.startsWith("```") ||
         /^(-{3,}|\*{3,}|_{3,})$/.test(curTrim) ||
         /^!\[([^\]]*)\]\(([^)]+)\)$/.test(curTrim) ||
-        /^#{1,3}\s+/.test(cur) ||
+        /^#{1,6}\s+/.test(cur) ||
+        (cur.includes("|") && i + 1 < lines.length && isTableSeparatorLine(lines[i + 1])) ||
         curTrim.startsWith(">") ||
         /^\s*[-*]\s+/.test(cur) ||
         /^\s*\d+\.\s+/.test(cur)
