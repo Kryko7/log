@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 92" width="360" height="92" role="img" aria-label="Semi-translucent midnight indigo starlight washi tape">
+  <defs>
+    <clipPath id="washiNightClip">
+      <path d="M 14,11 L 64,12 L 122,10.5 L 182,12 L 242,10 L 302,12 L 345,10.5 L 349,17 L 343,23 L 350,30 L 344,36 L 352,43 L 345,50 L 351,57 L 344,63 L 349,70 L 343,76 L 346,80 L 288,81 L 226,79.5 L 168,81.5 L 106,79.5 L 48,81 L 12,80 L 16,73 L 9,66 L 15,59 L 8,52 L 16,45 L 10,38 L 16,31 L 9,24 L 15,17 Z" />
+    </clipPath>
+    <linearGradient id="nightWashiGrad" x1="0%" y1="0%" x2="100%" y2="10%">
+      <stop offset="0%" stop-color="#2C3748" stop-opacity="0.82" />
+      <stop offset="50%" stop-color="#3A475C" stop-opacity="0.78" />
+      <stop offset="100%" stop-color="#283140" stop-opacity="0.84" />
+    </linearGradient>
+  </defs>
+
+  <path d="M 15,13 L 346,12 L 345,82 L 13,82.5 Z" fill="#121419" opacity="0.14" />
+
+  <g clip-path="url(#washiNightClip)">
+    <rect x="0" y="0" width="360" height="92" fill="url(#nightWashiGrad)" />
+    <!-- Gilded starlight constellations & tiny crescents -->
+    <g fill="#E6B975" opacity="0.78">
+      <path d="M 52,32 C 45,35 43,43 47,49 C 51,54 58,55 63,51 C 57,51 52,47 51,41 C 50,37 51,34 52,32 Z" />
+      <path d="M 294,36 C 287,39 285,47 289,53 C 293,58 300,59 305,55 C 299,55 294,51 293,45 C 292,41 293,38 294,36 Z" />
+      <path d="M 176,30 L 178,37 L 185,39 L 178,41 L 176,48 L 174,41 L 167,39 L 174,37 Z" />
+      <circle cx="96" cy="54" r="2.0" />
+      <circle cx="122" cy="34" r="1.5" />
+      <circle cx="144" cy="56" r="1.8" />
+      <circle cx="216" cy="52" r="2.0" />
+      <circle cx="242" cy="32" r="1.5" />
+      <circle cx="264" cy="58" r="1.7" />
+      <circle cx="76" cy="36" r="1.1" />
+      <circle cx="322" cy="40" r="1.2" />
+    </g>
+    <g stroke="#E6B975" stroke-width="0.6" opacity="0.35">
+      <line x1="96" y1="54" x2="122" y2="34" />
+      <line x1="122" y1="34" x2="144" y2="56" />
+      <line x1="216" y1="52" x2="242" y2="32" />
+      <line x1="242" y1="32" x2="264" y2="58" />
+    </g>
+    <line x1="12" y1="12" x2="346" y2="12" stroke="#D99B52" stroke-width="0.8" opacity="0.35" />
+  </g>
+  <path d="M 14,11 L 64,12 L 122,10.5 L 182,12 L 242,10 L 302,12 L 345,10.5 L 349,17 L 343,23 L 350,30 L 344,36 L 352,43 L 345,50 L 351,57 L 344,63 L 349,70 L 343,76 L 346,80 L 288,81 L 226,79.5 L 168,81.5 L 106,79.5 L 48,81 L 12,80 L 16,73 L 9,66 L 15,59 L 8,52 L 16,45 L 10,38 L 16,31 L 9,24 L 15,17 Z"
+        fill="none" stroke="#536278" stroke-width="0.7" opacity="0.65" />
+</svg>

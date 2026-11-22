@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 92" width="360" height="92" role="img" aria-label="Semi-translucent warm ochre botanical leaf washi tape">
+  <defs>
+    <clipPath id="washiOchreClip">
+      <path d="M 12,11 L 52,12.5 L 106,10 L 160,12 L 222,10.5 L 284,12 L 346,10.5 L 350,17 L 344,23 L 351,29 L 345,35 L 352,42 L 346,49 L 351,56 L 345,62 L 350,69 L 344,75 L 347,80 L 292,79.5 L 234,81.5 L 176,79.5 L 116,81 L 56,79.5 L 13,81 L 17,74 L 10,67 L 16,60 L 9,53 L 17,46 L 10,39 L 16,32 L 9,25 L 15,18 Z" />
+    </clipPath>
+    <linearGradient id="ochreGrad" x1="0%" y1="0%" x2="100%" y2="8%">
+      <stop offset="0%" stop-color="#E5BE78" stop-opacity="0.78" />
+      <stop offset="45%" stop-color="#EED197" stop-opacity="0.74" />
+      <stop offset="100%" stop-color="#D9AB5E" stop-opacity="0.80" />
+    </linearGradient>
+  </defs>
+
+  <path d="M 14,13 L 347,12 L 346,82 L 14,83 Z" fill="#2A2421" opacity="0.08" />
+
+  <g clip-path="url(#washiOchreClip)">
+    <rect x="0" y="0" width="360" height="92" fill="url(#ochreGrad)" />
+    <!-- Delicate botanical ochre-walnut leaf trail -->
+    <g fill="none" stroke="#7E5929" stroke-linecap="round" opacity="0.45">
+      <path d="M 22,50 C 74,34 128,60 184,46 C 238,32 292,58 340,42" stroke-width="1.15" />
+      <path d="M 62,43 C 56,31 62,22 72,22 C 74,31 70,38 62,43 Z" fill="#8C6430" fill-opacity="0.18" stroke-width="0.9" />
+      <path d="M 104,48 C 110,60 104,69 94,69 C 92,60 96,53 104,48 Z" fill="#8C6430" fill-opacity="0.18" stroke-width="0.9" />
+      <path d="M 156,49 C 150,37 156,28 166,28 C 168,37 164,44 156,49 Z" fill="#8C6430" fill-opacity="0.18" stroke-width="0.9" />
+      <path d="M 212,41 C 218,53 212,62 202,62 C 200,53 204,46 212,41 Z" fill="#8C6430" fill-opacity="0.18" stroke-width="0.9" />
+      <path d="M 268,45 C 262,33 268,24 278,24 C 280,33 276,40 268,45 Z" fill="#8C6430" fill-opacity="0.18" stroke-width="0.9" />
+      <path d="M 314,47 C 320,59 314,68 304,68 C 302,59 306,52 314,47 Z" fill="#8C6430" fill-opacity="0.18" stroke-width="0.9" />
+    </g>
+    <line x1="12" y1="12" x2="348" y2="12" stroke="#FFF9ED" stroke-width="1.1" opacity="0.5" />
+    <line x1="12" y1="80" x2="348" y2="80" stroke="#A67C3E" stroke-width="0.9" opacity="0.35" />
+  </g>
+  <path d="M 12,11 L 52,12.5 L 106,10 L 160,12 L 222,10.5 L 284,12 L 346,10.5 L 350,17 L 344,23 L 351,29 L 345,35 L 352,42 L 346,49 L 351,56 L 345,62 L 350,69 L 344,75 L 347,80 L 292,79.5 L 234,81.5 L 176,79.5 L 116,81 L 56,79.5 L 13,81 L 17,74 L 10,67 L 16,60 L 9,53 L 17,46 L 10,39 L 16,32 L 9,25 L 15,18 Z"
+        fill="none" stroke="#B9904F" stroke-width="0.7" opacity="0.65" />
+</svg>

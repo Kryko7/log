@@ -1559,11 +1559,18 @@ export function createPolaroidElement(photo, figureNumber, callbacks = {}) {
  * @param {function} onChange
  */
 export function renderStampOverlay(container, stamps = [], editable = false, onChange = null) {
+  if (container._stampOverlayAbort) {
+    container._stampOverlayAbort.abort();
+    container._stampOverlayAbort = null;
+  }
   container.innerHTML = "";
   const list = Array.isArray(stamps) ? stamps.map((s) => ({ ...s })) : [];
   if (list.length === 0) return;
 
   let selectedId = null;
+  const overlayAbort = new AbortController();
+  container._stampOverlayAbort = overlayAbort;
+
   const layer = el("div", "stamp-sticker-layer");
   if (editable) layer.classList.add("is-editable");
 
@@ -1571,13 +1578,70 @@ export function renderStampOverlay(container, stamps = [], editable = false, onC
     onChange?.(nextList.map((s) => ({ ...s })));
   }
 
+  function removeStampById(stampId) {
+    const idx = list.findIndex((item) => item.id === stampId);
+    if (idx < 0) return;
+    list.splice(idx, 1);
+    if (selectedId === stampId) selectedId = null;
+    commit(list);
+    redraw();
+  }
+
+  if (editable) {
+    document.addEventListener(
+      "mousedown",
+      (ev) => {
+        if (!layer.isConnected) {
+          overlayAbort.abort();
+          return;
+        }
+        if (selectedId && !ev.target?.closest?.(".placed-stamp-node")) {
+          selectedId = null;
+          redraw();
+        }
+      },
+      { signal: overlayAbort.signal }
+    );
+
+    window.addEventListener(
+      "keydown",
+      (ev) => {
+        if (!layer.isConnected) {
+          overlayAbort.abort();
+          return;
+        }
+        if (!selectedId) return;
+        const active = document.activeElement;
+        const inTextField =
+          active &&
+          (active.tagName === "INPUT" ||
+            active.tagName === "TEXTAREA" ||
+            active.isContentEditable);
+        if (inTextField) return;
+
+        if (ev.key === "Delete" || ev.key === "Backspace") {
+          ev.preventDefault();
+          removeStampById(selectedId);
+        } else if (ev.key === "Escape") {
+          ev.preventDefault();
+          selectedId = null;
+          redraw();
+        }
+      },
+      { signal: overlayAbort.signal }
+    );
+  }
+
   function redraw() {
     layer.innerHTML = "";
     for (const st of list) {
-      const isPostmark = String(st.asset_path || "").includes("postmark-");
+      const pathStr = String(st.asset_path || "");
+      const isPostmark = pathStr.includes("postmark-");
+      const isWashi = pathStr.includes("washi");
+      const kindClass = isWashi ? "is-washi" : isPostmark ? "is-postmark" : "is-diecut";
       const node = el(
         "div",
-        `placed-stamp-node ${isPostmark ? "is-postmark" : "is-diecut"}${
+        `placed-stamp-node ${kindClass}${
           editable && selectedId === st.id ? " is-selected" : ""
         }`
       );
@@ -1586,6 +1650,7 @@ export function renderStampOverlay(container, stamps = [], editable = false, onC
       node.style.transform = `translate(-50%, -50%) rotate(${st.rotation_deg || 0}deg) scale(${
         st.scale || 1
       })`;
+      node.dataset.stampId = st.id;
 
       const stampUrl = safeAssetUrl(st.asset_path);
       if (stampUrl) {
@@ -1598,27 +1663,64 @@ export function renderStampOverlay(container, stamps = [], editable = false, onC
         node.appendChild(img);
       }
 
-      if (st.label) {
+      if (st.label && !isWashi) {
         node.appendChild(el("span", "placed-stamp-label", st.label));
       }
 
       if (editable) {
+        node.tabIndex = 0;
+        node.setAttribute("role", "group");
+        node.setAttribute("aria-label", `Stamp: ${st.label || st.asset_id || "Sticker"}`);
+
+        // Always-reachable one-click corner remove button (visible on hover, focus, or selection)
+        const quickRemove = el("button", "stamp-quick-remove");
+        quickRemove.type = "button";
+        quickRemove.title = "Remove stamp";
+        quickRemove.setAttribute("aria-label", `Remove ${st.label || st.asset_id || "stamp"}`);
+        quickRemove.innerHTML = icon("close", "tiny-icon");
+        quickRemove.addEventListener("mousedown", (ev) => {
+          ev.stopPropagation();
+        });
+        quickRemove.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          ev.preventDefault();
+          removeStampById(st.id);
+        });
+        node.appendChild(quickRemove);
+
+        node.addEventListener("focus", () => {
+          if (selectedId !== st.id) {
+            selectedId = st.id;
+            redraw();
+          }
+        });
+
         node.addEventListener("mousedown", (ev) => {
-          if (ev.target.closest(".stamp-mini-controls")) return;
+          if (
+            ev.target.closest(".stamp-mini-controls") ||
+            ev.target.closest(".stamp-quick-remove")
+          ) {
+            return;
+          }
           ev.preventDefault();
           ev.stopPropagation();
+          const wasSelected = selectedId === st.id;
           selectedId = st.id;
           layer.classList.add("is-dragging");
-          redraw();
+          if (!wasSelected) {
+            redraw();
+          }
 
           const rect = layer.getBoundingClientRect();
           const dragAc = new AbortController();
+          let moved = false;
           function onMove(mv) {
             if (!layer.isConnected) {
               dragAc.abort();
               return;
             }
             if (rect.width <= 0 || rect.height <= 0) return;
+            moved = true;
             st.x_pct = Math.min(Math.max(((mv.clientX - rect.left) / rect.width) * 100, 3), 97);
             st.y_pct = Math.min(Math.max(((mv.clientY - rect.top) / rect.height) * 100, 3), 97);
             const activeNode = layer.querySelector(`[data-stamp-id="${CSS.escape(st.id)}"]`);
@@ -1630,13 +1732,13 @@ export function renderStampOverlay(container, stamps = [], editable = false, onC
           function onUp() {
             dragAc.abort();
             layer.classList.remove("is-dragging");
-            commit(list);
+            if (moved) {
+              commit(list);
+            }
           }
           window.addEventListener("mousemove", onMove, { signal: dragAc.signal });
           window.addEventListener("mouseup", onUp, { signal: dragAc.signal });
         });
-
-        node.dataset.stampId = st.id;
 
         if (selectedId === st.id) {
           const ctrls = el("div", "stamp-mini-controls");
@@ -1682,15 +1784,11 @@ export function renderStampOverlay(container, stamps = [], editable = false, onC
 
           const del = el("button", "stamp-ctrl-btn danger");
           del.type = "button";
-          del.title = "Remove stamp";
-          del.innerHTML = icon("close", "tiny-icon");
+          del.title = "Remove stamp (Delete)";
+          del.innerHTML = `${icon("close", "tiny-icon")}<span>Remove</span>`;
           del.addEventListener("click", (ev) => {
             ev.stopPropagation();
-            const idx = list.findIndex((item) => item.id === st.id);
-            if (idx >= 0) list.splice(idx, 1);
-            selectedId = null;
-            commit(list);
-            redraw();
+            removeStampById(st.id);
           });
 
           ctrls.append(rotL, rotR, shrink, grow, del);
@@ -1712,16 +1810,29 @@ export function renderStampOverlay(container, stamps = [], editable = false, onC
  * @param {object} manifest
  * @param {function} onPick
  * @param {function} onClose
+ * @param {Array} placedStamps
+ * @param {function|null} onRemoveStamp
+ * @param {function|null} onClearAllStamps
  */
-export function renderStampPickerPopover(container, manifest, onPick, onClose) {
+export function renderStampPickerPopover(
+  container,
+  manifest,
+  onPick,
+  onClose,
+  placedStamps = [],
+  onRemoveStamp = null,
+  onClearAllStamps = null,
+  initialTab = "stickers",
+  onTabChange = null
+) {
   container.innerHTML = "";
-  let activeTab = "stickers";
+  let activeTab = initialTab || "stickers";
 
   const pop = el("div", "stamp-picker-popover");
   const head = el("div", "stamp-picker-header");
   const titleWrap = el("div", "stamp-picker-title");
   titleWrap.innerHTML = icon("stamp", "popover-icon");
-  titleWrap.appendChild(el("span", "small-caps-meta", "Stamps & Stickers"));
+  titleWrap.appendChild(el("span", "small-caps-meta", "Stamps, Stickers & Washi"));
   head.appendChild(titleWrap);
 
   const closeBtn = el("button", "icon-btn");
@@ -1732,12 +1843,57 @@ export function renderStampPickerPopover(container, manifest, onPick, onClose) {
   head.appendChild(closeBtn);
   pop.appendChild(head);
 
+  if (Array.isArray(placedStamps) && placedStamps.length > 0) {
+    const placedSection = el("div", "stamp-placed-section");
+    const placedHead = el("div", "stamp-placed-head");
+    placedHead.appendChild(
+      el("span", "small-caps-meta", `On This Page (${placedStamps.length})`)
+    );
+    if (onClearAllStamps) {
+      const clearBtn = el("button", "stamp-clear-all-btn", "Remove all");
+      clearBtn.type = "button";
+      clearBtn.addEventListener("click", () => onClearAllStamps());
+      placedHead.appendChild(clearBtn);
+    }
+    placedSection.appendChild(placedHead);
+
+    const chips = el("div", "stamp-placed-list");
+    for (const st of placedStamps) {
+      const chip = el("span", "stamp-placed-chip");
+      const thumbUrl = safeAssetUrl(st.asset_path);
+      if (thumbUrl) {
+        const thumb = document.createElement("img");
+        thumb.className = "stamp-placed-thumb";
+        thumb.src = thumbUrl;
+        thumb.alt = "";
+        chip.appendChild(thumb);
+      }
+      chip.appendChild(
+        el("span", "stamp-placed-name", st.label || st.asset_id || "Stamp")
+      );
+      if (onRemoveStamp) {
+        const rm = el("button", "stamp-placed-remove");
+        rm.type = "button";
+        rm.title = `Remove ${st.label || "stamp"}`;
+        rm.setAttribute("aria-label", `Remove ${st.label || "stamp"}`);
+        rm.innerHTML = icon("close", "tiny-icon");
+        rm.addEventListener("click", () => onRemoveStamp(st.id));
+        chip.appendChild(rm);
+      }
+      chips.appendChild(chip);
+    }
+    placedSection.appendChild(chips);
+    pop.appendChild(placedSection);
+  }
+
   const tabs = el("div", "stamp-picker-tabs");
   const stickerTab = el("button", "stamp-tab-btn is-active", "Stickers");
   stickerTab.type = "button";
   const postmarkTab = el("button", "stamp-tab-btn", "Postmarks");
   postmarkTab.type = "button";
-  tabs.append(stickerTab, postmarkTab);
+  const washiTab = el("button", "stamp-tab-btn", "Washi");
+  washiTab.type = "button";
+  tabs.append(stickerTab, postmarkTab, washiTab);
   pop.appendChild(tabs);
 
   const grid = el("div", "stamp-choices-grid");
@@ -1746,9 +1902,14 @@ export function renderStampPickerPopover(container, manifest, onPick, onClose) {
     grid.innerHTML = "";
     stickerTab.classList.toggle("is-active", activeTab === "stickers");
     postmarkTab.classList.toggle("is-active", activeTab === "stamps");
+    washiTab.classList.toggle("is-active", activeTab === "washi");
 
     const items =
-      activeTab === "stickers" ? manifest?.stickers || [] : manifest?.stamps || [];
+      activeTab === "stickers"
+        ? manifest?.stickers || []
+        : activeTab === "stamps"
+          ? manifest?.stamps || []
+          : manifest?.washi || [];
 
     for (const item of items) {
       const btn = el("button", "stamp-choice-card");
@@ -1758,12 +1919,16 @@ export function renderStampPickerPopover(container, manifest, onPick, onClose) {
       img.loading = "lazy";
       img.decoding = "async";
       img.alt = item.label;
-      img.className = activeTab === "stickers" ? "stamp-preview-diecut" : "stamp-preview-ink";
+      img.className =
+        activeTab === "stickers"
+          ? "stamp-preview-diecut"
+          : activeTab === "washi"
+            ? "stamp-preview-washi"
+            : "stamp-preview-ink";
       btn.appendChild(img);
       btn.appendChild(el("span", "stamp-choice-label", item.label));
       btn.addEventListener("click", () => {
         onPick?.(item);
-        onClose?.();
       });
       grid.appendChild(btn);
     }
@@ -1771,10 +1936,17 @@ export function renderStampPickerPopover(container, manifest, onPick, onClose) {
 
   stickerTab.addEventListener("click", () => {
     activeTab = "stickers";
+    onTabChange?.(activeTab);
     renderChoices();
   });
   postmarkTab.addEventListener("click", () => {
     activeTab = "stamps";
+    onTabChange?.(activeTab);
+    renderChoices();
+  });
+  washiTab.addEventListener("click", () => {
+    activeTab = "washi";
+    onTabChange?.(activeTab);
     renderChoices();
   });
 

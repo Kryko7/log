@@ -31,6 +31,38 @@
       "path": "/assets/covers/midnight-ink-garden.png",
       "description": "Candlelit nocturnal garden with fireflies, crescent moon, and gilded botanical ink linework.",
       "tags": ["night", "candlelit", "fireflies", "botanical", "dark-mode"]
+    },
+    {
+      "id": "autumn-maple-letter",
+      "label": "Autumn Maple & Wax Seal",
+      "category": "covers",
+      "path": "/assets/covers/autumn-maple-letter.png",
+      "description": "Deckle-edge cotton paper flat-lay with pressed crimson and ochre maple leaves, kraft envelope, and botanical wax seal.",
+      "tags": ["autumn", "maple", "letter", "wax-seal", "botanical"]
+    },
+    {
+      "id": "coastal-lighthouse-sketch",
+      "label": "Coastal Headland Sketch",
+      "category": "covers",
+      "path": "/assets/covers/coastal-lighthouse-sketch.png",
+      "description": "Editorial travel watercolor wash of a misty headland, distant lighthouse, and sea oats in fine sepia ink.",
+      "tags": ["coast", "travel", "lighthouse", "watercolor", "sketch"]
+    },
+    {
+      "id": "golden-hour-window",
+      "label": "Golden Hour Reading Nook",
+      "category": "covers",
+      "path": "/assets/covers/golden-hour-window.png",
+      "description": "Late-afternoon sunbeams across a quiet wooden writing desk with stoneware tea, stacked linen journals, and ivy.",
+      "tags": ["golden-hour", "cozy", "tea", "books", "window"]
+    },
+    {
+      "id": "winter-pine-lantern",
+      "label": "Winter Cedar & Lantern",
+      "category": "covers",
+      "path": "/assets/covers/winter-pine-lantern.png",
+      "description": "Nocturnal winter cedar boughs, pinecones, soft snowfall, and a warm amber brass lantern on charcoal parchment.",
+      "tags": ["winter", "night", "lantern", "pine", "dark-mode"]
     }
   ],
   "stamps": [
@@ -57,6 +89,38 @@
       "path": "/assets/svg/postmark-botanical.svg",
       "description": "Oval botanical sage herbarium specimen ink stamp with fine fern linework and catalog border.",
       "tags": ["svg", "herbarium", "fern", "sage", "specimen", "transparent"]
+    },
+    {
+      "id": "postmark-wax-seal",
+      "label": "Sealed Folio Wax Press",
+      "category": "stamps",
+      "path": "/assets/svg/postmark-wax-seal.svg",
+      "description": "Scalloped terracotta wax-seal ink impression engraved with a botanical laurel sprig.",
+      "tags": ["svg", "wax-seal", "laurel", "terracotta", "ink", "transparent"]
+    },
+    {
+      "id": "postmark-nocturne",
+      "label": "Nocturne Field Notes",
+      "category": "stamps",
+      "path": "/assets/svg/postmark-nocturne.svg",
+      "description": "Celestial observatory circular ink postmark with crescent moon, eight-point star, and lunar phases.",
+      "tags": ["svg", "moon", "nocturne", "celestial", "ink", "transparent"]
+    },
+    {
+      "id": "postmark-par-avion",
+      "label": "Par Avion Dispatch",
+      "category": "stamps",
+      "path": "/assets/svg/postmark-par-avion.svg",
+      "description": "Vintage rectangular airmail dispatch rubber stamp in botanical sage and terracotta ink.",
+      "tags": ["svg", "airmail", "travel", "dispatch", "ink", "transparent"]
+    },
+    {
+      "id": "postmark-coffee-ring",
+      "label": "Morning Pages Ring",
+      "category": "stamps",
+      "path": "/assets/svg/postmark-coffee-ring.svg",
+      "description": "Warm umber espresso ring and studio date stamp for quiet morning reflections.",
+      "tags": ["svg", "coffee", "morning", "studio", "ink", "transparent"]
     }
   ],
   "stickers": [
@@ -75,6 +139,38 @@
       "path": "/assets/stamps/botanical-fountain-pen.png",
       "description": "Transparent alpha-keyed die-cut sticker of a tortoiseshell and brass fountain pen entwined with sage sprigs.",
       "tags": ["fountain-pen", "botanical", "ink", "die-cut", "transparent"]
+    },
+    {
+      "id": "pressed-lavender-sprig",
+      "label": "Pressed Lavender Sprig",
+      "category": "stickers",
+      "path": "/assets/stamps/pressed-lavender-sprig.png",
+      "description": "Transparent die-cut sticker of pressed French lavender stems tied with cream linen twine.",
+      "tags": ["lavender", "botanical", "watercolor", "die-cut", "transparent"]
+    },
+    {
+      "id": "terracotta-teacup",
+      "label": "Terracotta Teacup",
+      "category": "stickers",
+      "path": "/assets/stamps/terracotta-teacup.png",
+      "description": "Transparent die-cut sticker of a hand-painted stoneware terracotta teacup with steam and chamomile.",
+      "tags": ["tea", "cozy", "terracotta", "chamomile", "die-cut", "transparent"]
+    },
+    {
+      "id": "brass-pocket-compass",
+      "label": "Brass Pocket Compass",
+      "category": "stickers",
+      "path": "/assets/stamps/brass-pocket-compass.png",
+      "description": "Transparent die-cut sticker of an antique brass pocket compass tucked beside an olive sprig.",
+      "tags": ["compass", "travel", "brass", "botanical", "die-cut", "transparent"]
+    },
+    {
+      "id": "amber-field-butterfly",
+      "label": "Amber Field Butterfly",
+      "category": "stickers",
+      "path": "/assets/stamps/amber-field-butterfly.png",
+      "description": "Transparent die-cut sticker of a naturalist watercolor terracotta-amber butterfly.",
+      "tags": ["butterfly", "nature", "herbarium", "watercolor", "die-cut", "transparent"]
     },
     {
       "id": "app-icon",
@@ -109,6 +205,22 @@
       "path": "/assets/svg/washi-terracotta.svg",
       "description": "Semi-translucent terracotta and sage watercolor wash tape strip with organic deckle-torn paper edges.",
       "tags": ["svg", "washi", "terracotta", "sage", "transparent", "polaroid"]
+    },
+    {
+      "id": "washi-ochre-leaf",
+      "label": "Golden Ochre Leaf Washi",
+      "category": "washi",
+      "path": "/assets/svg/washi-ochre-leaf.svg",
+      "description": "Semi-translucent warm ochre washi tape decorated with a trailing walnut-ink botanical leaf vine.",
+      "tags": ["svg", "washi", "ochre", "leaf", "transparent", "polaroid"]
+    },
+    {
+      "id": "washi-midnight-stars",
+      "label": "Midnight Starlight Washi",
+      "category": "washi",
+      "path": "/assets/svg/washi-midnight-stars.svg",
+      "description": "Semi-translucent deep slate-indigo washi tape accented with gilded crescents and tiny constellation lines.",
+      "tags": ["svg", "washi", "night", "stars", "indigo", "transparent", "polaroid"]
     }
   ]
 }

@@ -105,9 +105,16 @@ const SLASH_COMMANDS = [
   {
     cmd: "/stamp",
     glyph: "INK",
-    title: "Place Stamp or Sticker",
-    sub: "Botanical seal or postmark",
+    title: "Place or Manage Stamps",
+    sub: "Botanical seals, stickers & washi",
     action: "stamp",
+  },
+  {
+    cmd: "/clear-stamps",
+    glyph: "CLR",
+    title: "Remove All Page Stamps",
+    sub: "Clear all stamps placed on this entry",
+    action: "clear_stamps",
   },
   {
     cmd: "/template",
@@ -367,6 +374,7 @@ export function renderEntryEditor(container, state, callbacks = {}) {
   let weatherPopoverAbort = null;
   let promptDismissed = false;
   let activeInlineTool = null; // null | "voice" | "template" | "link" | "stamp" | "save_template"
+  let stampPickerTab = "stickers";
   let activeRecorderCard = null;
   let activeWaveformRibbons = [];
   let slashState = null; // { query, start, end, selectedIndex }
@@ -395,9 +403,36 @@ export function renderEntryEditor(container, state, callbacks = {}) {
       mode === "write",
       (updatedStamps) => {
         draft.stamps = updatedStamps;
+        if (typeof renderInsertBar === "function") renderInsertBar();
+        if (typeof renderLedger === "function") renderLedger();
+        if (activeInlineTool === "stamp" && typeof renderInlineTool === "function") {
+          renderInlineTool();
+        }
         markDirtyAndScheduleSave();
       }
     );
+  };
+
+  const removeStampById = (stampId) => {
+    const before = draft.stamps.length;
+    draft.stamps = draft.stamps.filter((s) => s.id !== stampId);
+    if (draft.stamps.length === before) return;
+    syncStampOverlay();
+    renderInsertBar();
+    renderLedger();
+    if (activeInlineTool === "stamp") renderInlineTool();
+    markDirtyAndScheduleSave();
+  };
+
+  const clearAllStamps = () => {
+    if (draft.stamps.length === 0) return;
+    draft.stamps = [];
+    syncStampOverlay();
+    renderInsertBar();
+    renderLedger();
+    if (activeInlineTool === "stamp") renderInlineTool();
+    markDirtyAndScheduleSave();
+    callbacks.onToast?.("Cleared all stamps from entry", "info");
   };
 
   // Optional cover banner container (populated only if user selects one)
@@ -2102,6 +2137,8 @@ export function renderEntryEditor(container, state, callbacks = {}) {
     } else if (item.action === "stamp") {
       activeInlineTool = "stamp";
       renderInlineTool();
+    } else if (item.action === "clear_stamps") {
+      clearAllStamps();
     } else if (item.action === "template") {
       activeInlineTool = "template";
       renderInlineTool();
@@ -2229,29 +2266,40 @@ export function renderEntryEditor(container, state, callbacks = {}) {
     if (activeInlineTool === "stamp") {
       renderStampPickerPopover(
         inlineToolContainer,
-        state.manifest || { stickers: [], stamps: [] },
+        state.manifest || { stickers: [], stamps: [], washi: [] },
         (item) => {
           const id =
             typeof crypto !== "undefined" && crypto.randomUUID
               ? crypto.randomUUID()
               : `stamp-${Date.now()}`;
-          const offset = (draft.stamps.length * 11) % 48;
+          const idx = draft.stamps.length;
+          const offset = (idx * 13) % 52;
           draft.stamps.push({
             id,
             asset_id: item.id,
             asset_path: item.path,
-            x_pct: 78,
+            x_pct: idx % 2 === 0 ? 89 : 11,
             y_pct: 14 + offset,
             rotation_deg: Math.round((Math.random() * 12 - 6) * 10) / 10,
             scale: 1.0,
             label: item.label || null,
           });
           syncStampOverlay();
+          renderInsertBar();
+          renderLedger();
+          renderInlineTool();
           markDirtyAndScheduleSave();
         },
         () => {
           activeInlineTool = null;
           renderInlineTool();
+        },
+        draft.stamps,
+        removeStampById,
+        clearAllStamps,
+        stampPickerTab,
+        (nextTab) => {
+          stampPickerTab = nextTab;
         }
       );
       return;
@@ -2520,7 +2568,7 @@ export function renderEntryEditor(container, state, callbacks = {}) {
         },
       },
       {
-        label: "Stamp",
+        label: draft.stamps.length > 0 ? `Stamp (${draft.stamps.length})` : "Stamp",
         ic: "stamp",
         onClick: () => {
           activeInlineTool = activeInlineTool === "stamp" ? null : "stamp";
@@ -3098,6 +3146,52 @@ export function renderEntryEditor(container, state, callbacks = {}) {
     }
 
     ledgerContainer.appendChild(dl);
+
+    if (draft.stamps.length > 0) {
+      const stampsBar = document.createElement("div");
+      stampsBar.className = "ledger-stamps-bar";
+
+      const stHead = document.createElement("div");
+      stHead.className = "stamp-placed-head";
+      const stTitle = document.createElement("span");
+      stTitle.className = "small-caps-meta";
+      stTitle.textContent = `Page Stamps & Stickers (${draft.stamps.length})`;
+      const clearBtn = document.createElement("button");
+      clearBtn.type = "button";
+      clearBtn.className = "stamp-clear-all-btn";
+      clearBtn.textContent = "Remove all";
+      clearBtn.addEventListener("click", clearAllStamps);
+      stHead.append(stTitle, clearBtn);
+      stampsBar.appendChild(stHead);
+
+      const listEl = document.createElement("div");
+      listEl.className = "stamp-placed-list";
+      for (const st of draft.stamps) {
+        const chip = document.createElement("span");
+        chip.className = "stamp-placed-chip";
+        if (st.asset_path) {
+          const thumb = document.createElement("img");
+          thumb.className = "stamp-placed-thumb";
+          thumb.src = resolveVaultUrl(st.asset_path);
+          thumb.alt = "";
+          chip.appendChild(thumb);
+        }
+        const nm = document.createElement("span");
+        nm.className = "stamp-placed-name";
+        nm.textContent = st.label || st.asset_id || "Stamp";
+        const rm = document.createElement("button");
+        rm.type = "button";
+        rm.className = "stamp-placed-remove";
+        rm.title = `Remove ${nm.textContent}`;
+        rm.setAttribute("aria-label", `Remove ${nm.textContent}`);
+        rm.appendChild(iconNode("close", "tiny-icon"));
+        rm.addEventListener("click", () => removeStampById(st.id));
+        chip.append(nm, rm);
+        listEl.appendChild(chip);
+      }
+      stampsBar.appendChild(listEl);
+      ledgerContainer.appendChild(stampsBar);
+    }
   };
 
   const renderConnections = () => {
@@ -3293,6 +3387,10 @@ export function renderEntryEditor(container, state, callbacks = {}) {
         weatherPopoverAbort = null;
       }
       lifecycleAbort.abort();
+      if (stampLayer._stampOverlayAbort) {
+        stampLayer._stampOverlayAbort.abort();
+        stampLayer._stampOverlayAbort = null;
+      }
       destroyActiveRecorder();
       destroyActiveWaveforms();
     },

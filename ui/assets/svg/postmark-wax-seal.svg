@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 220" width="220" height="220" role="img" aria-label="Terracotta botanical wax seal stamp">
+  <g opacity="0.9">
+    <!-- Scalloped melted wax outer contour -->
+    <path d="M110,16 C126,14 142,22 154,28 C168,35 184,46 190,62 C197,78 205,94 202,112 C200,128 193,144 185,158 C176,174 162,186 146,193 C130,200 112,206 94,201 C78,197 62,190 48,179 C34,168 23,152 19,134 C15,118 14,98 20,82 C26,64 38,48 52,36 C68,24 90,18 110,16 Z"
+          fill="#B5563E" fill-opacity="0.16" stroke="#B5563E" stroke-width="2.4" />
+    <path d="M110,25 C124,23 139,30 149,36 C162,43 176,53 181,67 C188,81 194,95 191,111 C189,125 184,139 176,151 C168,165 156,176 142,182 C127,188 111,193 95,189 C81,186 67,179 55,170 C43,160 33,146 29,130 C25,116 25,98 30,84 C36,68 46,54 59,43 C73,32 92,27 110,25 Z"
+          fill="none" stroke="#B5563E" stroke-width="1.1" stroke-dasharray="60 2 90 1.5 75 2" />
+
+    <!-- Pressed brass die inner rings -->
+    <circle cx="110" cy="110" r="68" fill="none" stroke="#B5563E" stroke-width="2.1" />
+    <circle cx="110" cy="110" r="61" fill="none" stroke="#B5563E" stroke-width="0.9" stroke-dasharray="3 3" />
+    <circle cx="110" cy="110" r="46" fill="none" stroke="#B5563E" stroke-width="1.15" />
+
+    <!-- Top and bottom engraved captions -->
+    <text x="110" y="57.5" fill="#9E4530" font-family="Georgia, 'Times New Roman', serif" font-size="8.2" font-weight="bold" text-anchor="middle" letter-spacing="2.4">SEALED FOLIO</text>
+    <text x="110" y="167.5" fill="#9E4530" font-family="'Courier New', monospace" font-size="7.4" font-weight="bold" text-anchor="middle" letter-spacing="1.8">ARCHIVAL PRESS</text>
+
+    <!-- Side starlets -->
+    <path d="M53,110 L57,107 L61,110 L57,113 Z" fill="#B5563E" />
+    <path d="M159,110 L163,107 L167,110 L163,113 Z" fill="#B5563E" />
+
+    <!-- Engraved central olive / laurel sprig -->
+    <g fill="none" stroke="#9E4530" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M90,136 C99,122 108,108 117,92 C121,85 125,79 128,74" stroke-width="1.8" />
+      <path d="M100,121 C91,117 84,111 81,103 C89,105 96,111 101,119 Z" fill="#B5563E" fill-opacity="0.25" stroke-width="1.1" />
+      <path d="M104,116 C113,120 122,121 130,118 C124,112 115,111 106,114 Z" fill="#B5563E" fill-opacity="0.25" stroke-width="1.1" />
+      <path d="M108,107 C99,102 93,95 92,86 C100,89 106,96 109,105 Z" fill="#B5563E" fill-opacity="0.28" stroke-width="1.1" />
+      <path d="M112,101 C121,105 129,105 137,101 C131,96 122,95 113,99 Z" fill="#B5563E" fill-opacity="0.28" stroke-width="1.1" />
+      <path d="M116,93 C109,87 105,80 106,72 C113,76 117,83 118,91 Z" fill="#B5563E" fill-opacity="0.26" stroke-width="1.05" />
+      <path d="M120,87 C128,89 135,88 141,84 C135,80 127,81 121,85 Z" fill="#B5563E" fill-opacity="0.26" stroke-width="1.05" />
+      <path d="M124,78 C125,71 129,67 135,66 C133,73 129,77 125,79 Z" fill="#B5563E" fill-opacity="0.3" stroke-width="1.0" />
+      <circle cx="94" cy="134" r="2.2" fill="#B5563E" stroke="none" />
+      <circle cx="115" cy="126" r="1.8" fill="#B5563E" stroke="none" />
+    </g>
+  </g>
+</svg>

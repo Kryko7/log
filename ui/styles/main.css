@@ -1052,6 +1052,7 @@ body.night .sidebar-new-btn {
 
 .entry-topbar {
   position: relative;
+  z-index: 14;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -2136,7 +2137,7 @@ body.night .polaroid-card {
 .stamp-sticker-layer {
   position: absolute;
   inset: 0;
-  z-index: 1;
+  z-index: 6;
   pointer-events: none;
 }
 
@@ -2152,10 +2153,46 @@ body.night .polaroid-card {
   display: flex;
   flex-direction: column;
   align-items: center;
+  outline: none;
 }
 
 .stamp-sticker-layer.is-editable .placed-stamp-node {
   cursor: grab;
+}
+
+.stamp-quick-remove {
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-page);
+  color: var(--accent-stamp);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+  box-shadow: var(--card-shadow);
+  opacity: 0;
+  transform: scale(0.86);
+  transition: opacity 0.14s ease, transform 0.14s ease, background 0.14s ease, color 0.14s ease;
+  z-index: 10;
+}
+
+.placed-stamp-node:hover .stamp-quick-remove,
+.placed-stamp-node:focus-within .stamp-quick-remove,
+.placed-stamp-node.is-selected .stamp-quick-remove {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.stamp-quick-remove:hover {
+  background: var(--accent-stamp);
+  border-color: var(--accent-stamp);
+  color: #FBF7F0;
 }
 
 .placed-stamp-node.is-diecut .placed-stamp-img {
@@ -2163,6 +2200,13 @@ body.night .polaroid-card {
   height: 84px;
   object-fit: contain;
   filter: drop-shadow(0 4px 10px rgba(38, 32, 29, 0.22));
+}
+
+.placed-stamp-node.is-washi .placed-stamp-img {
+  width: 152px;
+  height: auto;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 5px rgba(38, 32, 29, 0.14));
 }
 
 .placed-stamp-node.is-postmark .placed-stamp-img {
@@ -2213,6 +2257,9 @@ body.night .placed-stamp-node.is-postmark .placed-stamp-img {
 }
 
 .stamp-ctrl-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   border: none;
   background: transparent;
   padding: 2px 5px;
@@ -2228,9 +2275,12 @@ body.night .placed-stamp-node.is-postmark .placed-stamp-img {
 
 .stamp-ctrl-btn.danger {
   color: var(--accent-stamp);
+  font-weight: 500;
 }
 
 .stamp-picker-popover {
+  position: relative;
+  z-index: 12;
   margin-top: 0.85rem;
   padding: 0.9rem;
   border-radius: 6px;
@@ -2240,6 +2290,97 @@ body.night .placed-stamp-node.is-postmark .placed-stamp-img {
   display: flex;
   flex-direction: column;
   gap: 0.7rem;
+}
+
+.stamp-placed-section {
+  padding: 0.55rem 0.65rem;
+  border-radius: 5px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.ledger-stamps-bar {
+  margin-top: 0.85rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.stamp-placed-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.stamp-clear-all-btn {
+  border: none;
+  background: transparent;
+  padding: 0.12rem 0.35rem;
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--accent-stamp);
+  cursor: pointer;
+}
+
+.stamp-clear-all-btn:hover {
+  background: rgba(181, 86, 62, 0.1);
+}
+
+.stamp-placed-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.stamp-placed-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.22rem 0.35rem 0.22rem 0.38rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-page);
+  font-size: 11.5px;
+  color: var(--fg-ink);
+}
+
+.stamp-placed-thumb {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.stamp-placed-name {
+  max-width: 145px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stamp-placed-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  padding: 0;
+}
+
+.stamp-placed-remove:hover {
+  background: rgba(181, 86, 62, 0.14);
+  color: var(--accent-stamp);
 }
 
 .stamp-picker-header {
@@ -2304,6 +2445,12 @@ body.night .placed-stamp-node.is-postmark .placed-stamp-img {
 .stamp-preview-ink {
   width: 50px;
   height: 50px;
+  object-fit: contain;
+}
+
+.stamp-preview-washi {
+  width: 86px;
+  height: 36px;
   object-fit: contain;
 }
 
@@ -3606,6 +3753,8 @@ body.night .placed-stamp-node.is-postmark .placed-stamp-img {
 
 .entry-date-popover,
 .entry-weather-popover {
+  position: relative;
+  z-index: 12;
   margin-top: 0.55rem;
   padding: 0.78rem 0.9rem;
   border-radius: 6px;
@@ -4248,6 +4397,8 @@ body.night .filter-pill-btn.is-active {
   .entry-blank-prompt,
   .entry-cover-remove,
   .polaroid-remove-btn,
+  .stamp-quick-remove,
+  .stamp-mini-controls,
   .editorial-toast-stack,
   #modal-root {
     display: none !important;
