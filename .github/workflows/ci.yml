@@ -20,6 +20,8 @@ jobs:
           node-version: "22"
       - name: Verify UI modules, icon keys, Tauri IPC parity, assets, and zero emojis
         run: node scripts/check-ui.mjs
+      - name: Run frontend UI integration tests
+        run: node scripts/test-ui.mjs
       - name: Validate shell scripts
         run: |
           for f in scripts/*.sh; do
@@ -76,6 +78,8 @@ jobs:
           workspaces: "src-tauri -> target"
       - name: Clippy src-tauri (-D warnings)
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - name: Run src-tauri unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
       - name: Build Tauri release binary
         run: cargo build --manifest-path src-tauri/Cargo.toml --release
       - name: CLI end-to-end smoke test (seed-demo, age backup, restore, desktop install)

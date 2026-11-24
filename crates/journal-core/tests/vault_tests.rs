@@ -1181,6 +1181,232 @@ fn custom_templates_can_be_created_loaded_and_deleted() {
     assert_eq!(vault.list_templates().unwrap().len(), 4);
 }
 
+#[test]
+fn stamps_weather_location_and_mood_round_trip_across_rebuild() {
+    let tmp = TempVault::new("stamps-weather-roundtrip");
+    let vault = Vault::open(&tmp.path).unwrap();
+
+    let saved = vault
+        .save_entry(SaveEntryRequest {
+            id: None,
+            title: "Rainy Veranda Afternoon".into(),
+            date: Some(Utc.with_ymd_and_hms(2026, 11, 20, 14, 15, 0).unwrap()),
+            notebook_id: Some("daily".into()),
+            tags: vec!["rain".into(), "tea".into()],
+            mood: Some("calm".into()),
+            starred: true,
+            weather: Some(WeatherInfo {
+                condition: "Light Rain".into(),
+                temperature_c: Some(22.5),
+                icon_key: "rain".into(),
+                humidity_pct: Some(78),
+                summary: Some("Light Rain · 23°C".into()),
+            }),
+            location: Some(GeoLocation {
+                place_name: "Kandy".into(),
+                city: Some("Kandy".into()),
+                country: Some("Sri Lanka".into()),
+                latitude: Some(7.2906),
+                longitude: Some(80.6337),
+            }),
+            stamps: vec![StampPlacement {
+                id: "st-1".into(),
+                asset_id: "pressed-lavender-sprig".into(),
+                asset_path: "/assets/stamps/pressed-lavender-sprig.png".into(),
+                x_pct: 89.0,
+                y_pct: 18.0,
+                rotation_deg: -4.5,
+                scale: 1.1,
+                label: Some("Pressed Lavender Sprig".into()),
+            }],
+            photos: vec![],
+            audio: vec![],
+            cover_asset: Some("/assets/covers/anim-rainy-window.svg".into()),
+            body: "Listening to rain on the garden glass.".into(),
+        })
+        .expect("save richly annotated entry");
+
+    assert_eq!(vault.rebuild_index().unwrap(), 1);
+    let loaded = vault.get_entry(&saved.id.to_string()).unwrap();
+    assert_eq!(loaded.frontmatter.stamps.len(), 1);
+    assert_eq!(
+        loaded.frontmatter.stamps[0].asset_id,
+        "pressed-lavender-sprig"
+    );
+    assert_eq!(
+        loaded.frontmatter.cover_asset.as_deref(),
+        Some("/assets/covers/anim-rainy-window.svg")
+    );
+    assert_eq!(
+        loaded.frontmatter.weather.as_ref().unwrap().condition,
+        "Light Rain"
+    );
+    assert_eq!(
+        loaded.frontmatter.location.as_ref().unwrap().place_name,
+        "Kandy"
+    );
+    assert_eq!(loaded.frontmatter.mood.as_deref(), Some("calm"));
+}
+
+#[test]
+fn search_entries_supports_filter_only_queries_without_text() {
+    let tmp = TempVault::new("filter-only-search");
+    let vault = Vault::open(&tmp.path).unwrap();
+
+    vault
+        .create_notebook(CreateNotebookRequest {
+            name: "Travel".into(),
+            description: None,
+            cover_asset: None,
+            accent_color: None,
+        })
+        .unwrap();
+
+    vault
+        .save_entry(SaveEntryRequest {
+            id: None,
+            title: "Starred Calm Note".into(),
+            date: Some(Utc.with_ymd_and_hms(2026, 11, 10, 9, 0, 0).unwrap()),
+            notebook_id: Some("travel".into()),
+            tags: vec!["coast".into()],
+            mood: Some("calm".into()),
+            starred: true,
+            weather: None,
+            location: None,
+            stamps: vec![],
+            photos: vec![],
+            audio: vec![],
+            cover_asset: None,
+            body: "Sea breeze at dusk.".into(),
+        })
+        .unwrap();
+
+    vault
+        .save_entry(SaveEntryRequest {
+            id: None,
+            title: "Plain Daily Note".into(),
+            date: Some(Utc.with_ymd_and_hms(2026, 11, 20, 9, 0, 0).unwrap()),
+            notebook_id: Some("daily".into()),
+            tags: vec!["work".into()],
+            mood: Some("energized".into()),
+            starred: false,
+            weather: None,
+            location: None,
+            stamps: vec![],
+            photos: vec![],
+            audio: vec![],
+            cover_asset: None,
+            body: "Shipping tests.".into(),
+        })
+        .unwrap();
+
+    let starred_hits = vault
+        .search_entries(&SearchQuery {
+            text: None,
+            notebook_id: None,
+            tag: None,
+            mood: None,
+            starred_only: true,
+            from_date: None,
+            to_date: None,
+            limit: None,
+            offset: None,
+        })
+        .unwrap();
+    assert_eq!(starred_hits.len(), 1);
+    assert_eq!(starred_hits[0].summary.title, "Starred Calm Note");
+
+    let mood_and_nb_hits = vault
+        .search_entries(&SearchQuery {
+            text: Some("   ".into()),
+            notebook_id: Some("travel".into()),
+            tag: Some("coast".into()),
+            mood: Some("calm".into()),
+            starred_only: false,
+            from_date: None,
+            to_date: None,
+            limit: None,
+            offset: None,
+        })
+        .unwrap();
+    assert_eq!(mood_and_nb_hits.len(), 1);
+    assert_eq!(mood_and_nb_hits[0].summary.title, "Starred Calm Note");
+}
+
+#[test]
+fn sync_index_incremental_reconciles_external_delete_and_edit() {
+    let tmp = TempVault::new("sync-incremental-live");
+    let vault = Vault::open(&tmp.path).unwrap();
+
+    let a = vault
+        .save_entry(SaveEntryRequest {
+            id: None,
+            title: "Keep Me".into(),
+            date: Some(Utc.with_ymd_and_hms(2026, 11, 18, 9, 0, 0).unwrap()),
+            notebook_id: Some("daily".into()),
+            tags: vec![],
+            mood: None,
+            starred: false,
+            weather: None,
+            location: None,
+            stamps: vec![],
+            photos: vec![],
+            audio: vec![],
+            cover_asset: None,
+            body: "Before external edit.".into(),
+        })
+        .unwrap();
+    let b = vault
+        .save_entry(SaveEntryRequest {
+            id: None,
+            title: "Remove Externally".into(),
+            date: Some(Utc.with_ymd_and_hms(2026, 11, 19, 9, 0, 0).unwrap()),
+            notebook_id: Some("daily".into()),
+            tags: vec![],
+            mood: None,
+            starred: false,
+            weather: None,
+            location: None,
+            stamps: vec![],
+            photos: vec![],
+            audio: vec![],
+            cover_asset: None,
+            body: "Will disappear from disk.".into(),
+        })
+        .unwrap();
+
+    // Edit A and remove B directly on disk while Vault stays open.
+    let path_a = vault.root().join(&a.path);
+    let mut parsed = parse_entry_file(&fs::read_to_string(&path_a).unwrap(), &a.path).unwrap();
+    parsed.frontmatter.updated_at = Utc::now();
+    let updated_raw =
+        serialize_entry(&parsed.frontmatter, "After external obsidian edit.").unwrap();
+    fs::write(&path_a, updated_raw).unwrap();
+    fs::remove_file(vault.root().join(&b.path)).unwrap();
+
+    let changed = vault.sync_index_incremental().unwrap();
+    assert_eq!(changed, 2); // 1 externally modified + 1 externally deleted
+    assert_eq!(vault.sync_index_incremental().unwrap(), 0);
+    assert_eq!(vault.list_entries(None, None, None, None).unwrap().len(), 1);
+
+    let hits = vault
+        .search_entries(&SearchQuery {
+            text: Some("obsidian".into()),
+            notebook_id: None,
+            tag: None,
+            mood: None,
+            starred_only: false,
+            from_date: None,
+            to_date: None,
+            limit: None,
+            offset: None,
+        })
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].summary.id, a.id);
+    assert!(vault.get_entry(&b.id.to_string()).is_err());
+}
+
 /// Build a valid JPEG APP1 EXIF segment (little-endian TIFF) with DateTimeOriginal & GPS.
 fn inject_minimal_exif_into_jpeg(jpeg: &[u8]) -> Vec<u8> {
     assert!(jpeg.starts_with(&[0xFF, 0xD8]));

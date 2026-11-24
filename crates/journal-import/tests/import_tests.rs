@@ -453,3 +453,62 @@ fn notion_directory_rejects_traversal_and_symlink_images() {
     assert!(entry.frontmatter.photos.is_empty());
     assert!(!entry.body.contains("/vault-media/"));
 }
+
+#[test]
+fn dayone_and_notion_dry_run_do_not_mutate_vault() {
+    let tmp = TempDir::new("dry-run-no-mutate");
+    let vault_dir = tmp.path.join("vault");
+    let zip_path = tmp.path.join("dayone-dry.zip");
+    create_dayone_zip_fixture(&zip_path);
+
+    let notion_json = tmp.path.join("notion-dry.json");
+    let snapshot = serde_json::json!([
+        {
+            "id": "notion-dry-1",
+            "Entry": "Dry Run Notion Entry",
+            "date:Date:start": "2026-03-01T10:00:00Z",
+            "Source": "Notion",
+            "Starred": false,
+            "body": "Should not be written during dry run."
+        }
+    ]);
+    fs::write(
+        &notion_json,
+        serde_json::to_string_pretty(&snapshot).unwrap(),
+    )
+    .unwrap();
+
+    let vault = Vault::open(&vault_dir).expect("open vault");
+
+    let d1_report = import_dayone(
+        &vault,
+        &ImportDayOneRequest {
+            zip_path: zip_path.to_string_lossy().into_owned(),
+            notebook_id: None,
+            dry_run: true,
+        },
+    )
+    .expect("dayone dry run");
+    assert_eq!(d1_report.imported_count, 2);
+    assert_eq!(d1_report.failed_count, 0);
+    assert!(vault
+        .list_entries(None, None, None, None)
+        .unwrap()
+        .is_empty());
+
+    let n_report = import_notion(
+        &vault,
+        &ImportNotionRequest {
+            source_path: notion_json.to_string_lossy().into_owned(),
+            notebook_id: None,
+            dry_run: true,
+        },
+    )
+    .expect("notion dry run");
+    assert_eq!(n_report.imported_count, 1);
+    assert_eq!(n_report.failed_count, 0);
+    assert!(vault
+        .list_entries(None, None, None, None)
+        .unwrap()
+        .is_empty());
+}

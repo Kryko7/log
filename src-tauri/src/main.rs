@@ -879,9 +879,7 @@ fn validate_external_url(raw: &str) -> Result<String, String> {
         return Err("Invalid URL".to_string());
     }
     let lower = trimmed.to_ascii_lowercase();
-    if lower.starts_with("https://")
-        || lower.starts_with("http://")
-        || lower.starts_with("mailto:")
+    if lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("mailto:")
     {
         Ok(trimmed.to_string())
     } else {
@@ -1741,6 +1739,41 @@ mod tests {
             // create_new must fail if the target path already exists
             assert!(write_private_temp_file(&path, b"overwrite").is_err());
         }
-        assert!(!path.exists(), "TempFileGuard must delete temp file on drop");
+        assert!(
+            !path.exists(),
+            "TempFileGuard must delete temp file on drop"
+        );
+    }
+
+    #[test]
+    fn embedded_asset_manifest_parses_all_categories_and_animated_covers() {
+        let manifest: AssetManifest =
+            serde_json::from_str(EMBEDDED_MANIFEST_JSON).expect("parse embedded manifest");
+        assert!(
+            manifest.covers.len() >= 14,
+            "expected watercolor + animated covers"
+        );
+        assert!(manifest
+            .covers
+            .iter()
+            .any(|c| c.tags.iter().any(|t| t == "animated")));
+        assert!(manifest.stamps.len() >= 7);
+        assert!(manifest.stickers.len() >= 7);
+        assert!(manifest.washi.len() >= 5);
+        for item in manifest
+            .covers
+            .iter()
+            .chain(manifest.stamps.iter())
+            .chain(manifest.stickers.iter())
+            .chain(manifest.washi.iter())
+        {
+            assert!(!item.id.trim().is_empty());
+            assert!(!item.label.trim().is_empty());
+            assert!(
+                item.path.starts_with("/assets/"),
+                "asset path should start with /assets/: {}",
+                item.path
+            );
+        }
     }
 }
