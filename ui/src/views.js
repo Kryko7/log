@@ -2775,10 +2775,11 @@ function renderGdriveStatusBar(bar, state, isConfigOpen, onToggleConfig, getCall
   bar.append(info, actions);
 }
 
-function renderBackupDynamicRegion(region, state, getPassphrase, getCallbacks) {
-  region.innerHTML = "";
+function renderBackupFeedbackBanner(slot, state) {
+  if (!slot) return;
+  slot.innerHTML = "";
   if (state.backupError) {
-    region.appendChild(el("p", "form-error", state.backupError));
+    slot.appendChild(el("p", "form-error", state.backupError));
   }
   if (state.syncResult?.message) {
     const isWarning = state.syncResult.uploaded_remote === false;
@@ -2792,8 +2793,12 @@ function renderBackupDynamicRegion(region, state, getPassphrase, getCallbacks) {
     banner.innerHTML = `${icon(isWarning ? "shield" : "check")}<span>${escapeHtml(
       state.syncResult.message
     )}</span>`;
-    region.appendChild(banner);
+    slot.appendChild(banner);
   }
+}
+
+function renderBackupDynamicRegion(region, state, getPassphrase, getCallbacks) {
+  region.innerHTML = "";
 
   const listSection = el("section", "backup-list-section");
   const listHead = el("div", "backup-list-header");
@@ -2949,6 +2954,9 @@ export function renderBackupModal(container, state, callbacks = {}) {
       }
     }
 
+    const feedbackSlot = existing.querySelector('[data-region="backup-feedback"]');
+    renderBackupFeedbackBanner(feedbackSlot, state);
+
     const region = existing.querySelector('[data-region="backup-dynamic"]');
     if (region) {
       renderBackupDynamicRegion(
@@ -3090,6 +3098,12 @@ export function renderBackupModal(container, state, callbacks = {}) {
   );
   gdriveSection.appendChild(statusBar);
 
+  const feedbackSlot = document.createElement("div");
+  feedbackSlot.dataset.region = "backup-feedback";
+  feedbackSlot.style.display = "contents";
+  renderBackupFeedbackBanner(feedbackSlot, state);
+  gdriveSection.appendChild(feedbackSlot);
+
   // 1. rclone quick browser sign-in
   const rcloneGroup = el("div", "gdrive-config-group");
   rcloneGroup.appendChild(
@@ -3133,7 +3147,7 @@ export function renderBackupModal(container, state, callbacks = {}) {
   const clientSecretInput = document.createElement("input");
   clientSecretInput.type = "password";
   clientSecretInput.className = "editorial-input";
-  clientSecretInput.placeholder = "Client Secret (optional)";
+  clientSecretInput.placeholder = "Client Secret (required for Desktop OAuth)";
 
   const oauthBtn = el(
     "button",
@@ -3151,6 +3165,13 @@ export function renderBackupModal(container, state, callbacks = {}) {
   });
   oauthInputs.append(clientIdInput, clientSecretInput, oauthBtn);
   oauthGroup.appendChild(oauthInputs);
+  oauthGroup.appendChild(
+    el(
+      "p",
+      "panel-note",
+      "Google Cloud Desktop app OAuth clients require both Client ID and Client Secret (loopback redirect on 127.0.0.1 is automatic)."
+    )
+  );
   configCard.appendChild(oauthGroup);
 
   // 3. Direct OAuth Access Token

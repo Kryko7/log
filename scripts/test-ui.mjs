@@ -377,6 +377,7 @@ const {
   renderMigrationModal,
   renderInsightsModal,
   renderShortcutsModal,
+  renderBackupModal,
   openPolaroidLightbox,
   createPolaroidElement,
 } = await import(uiSrcUrl("views.js"));
@@ -1321,6 +1322,21 @@ await test("sidebar, Insights modal, Shortcuts modal, and Migration modal render
   modal.querySelector(".path-import-row input").value = "/tmp/dayone.zip";
   modal.querySelector('[data-role="migration-dayone-run"]').click();
   assert.deepEqual(importedArgs, { p: "/tmp/dayone.zip", dry: true, nb: "daily" });
+
+  // Backup modal renders error banner inside [data-region="backup-feedback"] above config card
+  renderBackupModal(
+    modal,
+    {
+      ...state,
+      backupConfig: { gdrive_folder: "LogJournal", keep_last_n: 3 },
+      gdriveStatus: { connected: false, method: "none", detail: "Not connected" },
+      backupError: "Google Desktop OAuth requires both your Client ID and Client Secret.",
+      backups: [],
+    },
+    { onClose: () => {} }
+  );
+  const fb = modal.querySelector('[data-region="backup-feedback"]');
+  assert.ok(fb && fb.textContent.includes("Client Secret"));
 
   sb.remove();
   modal.remove();

@@ -600,6 +600,38 @@ fn spawn_browser_open(url: &str) -> std::io::Result<()> {
         .map(|_| ())
 }
 
+fn escape_html_text(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn format_oauth_token_exchange_error(status: reqwest::StatusCode, body: &str) -> String {
+    let lower = body.to_ascii_lowercase();
+    if lower.contains("client_secret") {
+        return "Google Desktop OAuth requires both your Client ID and Client Secret. Paste the Client Secret from Google Cloud Console and click Sign in with Browser again.".to_string();
+    }
+    if lower.contains("invalid_client") {
+        return "Google rejected the OAuth Client ID or Client Secret (invalid_client). Verify both credentials in Google Cloud Console and retry.".to_string();
+    }
+    let snippet = body.trim();
+    if snippet.is_empty() {
+        format!("Google token exchange failed (HTTP {status}).")
+    } else {
+        let short: String = snippet.chars().take(280).collect();
+        format!("Google token exchange failed (HTTP {status}): {short}")
+    }
+}
+
 async fn write_http_response(
     stream: &mut tokio::net::TcpStream,
     status_line: &str,
@@ -618,7 +650,7 @@ async fn write_http_response(
 async fn wait_for_oauth_callback(
     listener: TcpListener,
     expected_state: &str,
-) -> Result<(String, Option<String>)> {
+) -> Result<(tokio::net::TcpStream, String, Option<String>)> {
     let deadline = tokio::time::Instant::now() + OAUTH_FLOW_TIMEOUT;
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -719,13 +751,9 @@ async fn wait_for_oauth_callback(
             ));
         };
 
-        write_http_response(
-            &mut stream,
-            "200 OK",
-            "<html><body style=\"font-family:Georgia,serif;background:#FBF7F0;color:#26201D;padding:2.5rem;max-width:520px;margin:auto;\"><h2>Log is connected to Google Drive</h2><p>Encrypted vault backups can now sync to your Google Drive. You may close this browser tab and return to Log.</p></body></html>",
-        )
-        .await;
-        return Ok((code, params.get("scope").cloned()));
+        // Keep the HTTP response open until token exchange & credential persistence succeed
+        // so the browser only shows "connected" when Log actually stored valid credentials.
+        return Ok((stream, code, params.get("scope").cloned()));
     }
 }
 
@@ -759,12 +787,25 @@ pub async fn connect_gdrive_oauth(req: &ConnectGdriveOauthRequest) -> Result<Gdr
             "Google OAuth Client ID must not be empty.".to_string(),
         ));
     }
+    let existing_auth = load_stored_gdrive_auth();
     let client_secret = req
         .client_secret
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(str::to_string);
+        .map(str::to_string)
+        .or_else(|| {
+            if existing_auth.client_id.as_deref().map(str::trim) == Some(client_id.as_str()) {
+                existing_auth
+                    .client_secret
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            } else {
+                None
+            }
+        });
 
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
@@ -790,9 +831,20 @@ pub async fn connect_gdrive_oauth(req: &ConnectGdriveOauthRequest) -> Result<Gdr
         )));
     }
 
-    let (code, _scope) = wait_for_oauth_callback(listener, &state).await?;
+    let (mut callback_stream, code, _scope) = wait_for_oauth_callback(listener, &state).await?;
 
-    let client = shared_gdrive_client().map_err(SyncError::InvalidInput)?;
+    let client = match shared_gdrive_client() {
+        Ok(c) => c,
+        Err(err) => {
+            let msg = format!("Google Drive HTTP client unavailable: {err}");
+            let html = format!(
+                "<html><body style=\"font-family:Georgia,serif;background:#FBF7F0;color:#26201D;padding:2.5rem;max-width:540px;margin:auto;\"><h2 style=\"color:#B5563E;\">Google Drive sign-in did not complete</h2><p>{}</p><p>You may close this tab and return to Log.</p></body></html>",
+                escape_html_text(&msg)
+            );
+            write_http_response(&mut callback_stream, "500 Internal Server Error", &html).await;
+            return Err(SyncError::InvalidInput(msg));
+        }
+    };
     let mut form_params: Vec<(&str, &str)> = vec![
         ("client_id", &client_id),
         ("code", &code),
@@ -804,25 +856,48 @@ pub async fn connect_gdrive_oauth(req: &ConnectGdriveOauthRequest) -> Result<Gdr
         form_params.push(("client_secret", secret));
     }
 
-    let token_resp = client
+    let token_resp = match client
         .post(GOOGLE_TOKEN_URL)
         .form(&form_params)
         .send()
         .await
-        .map_err(|e| SyncError::InvalidInput(format!("Google token exchange failed: {e}")))?;
+    {
+        Ok(r) => r,
+        Err(e) => {
+            let msg = format!("Google token exchange failed: {e}");
+            let html = format!(
+                "<html><body style=\"font-family:Georgia,serif;background:#FBF7F0;color:#26201D;padding:2.5rem;max-width:540px;margin:auto;\"><h2 style=\"color:#B5563E;\">Google Drive sign-in did not complete</h2><p>{}</p><p>You may close this tab and return to Log.</p></body></html>",
+                escape_html_text(&msg)
+            );
+            write_http_response(&mut callback_stream, "502 Bad Gateway", &html).await;
+            return Err(SyncError::InvalidInput(msg));
+        }
+    };
 
     if !token_resp.status().is_success() {
         let status = token_resp.status();
         let body = token_resp.text().await.unwrap_or_default();
-        return Err(SyncError::InvalidInput(format!(
-            "Google token exchange failed (HTTP {status}): {body}"
-        )));
+        let msg = format_oauth_token_exchange_error(status, &body);
+        let html = format!(
+            "<html><body style=\"font-family:Georgia,serif;background:#FBF7F0;color:#26201D;padding:2.5rem;max-width:540px;margin:auto;\"><h2 style=\"color:#B5563E;\">Google Drive sign-in did not complete</h2><p>{}</p><p>You may close this tab and return to Log.</p></body></html>",
+            escape_html_text(&msg)
+        );
+        write_http_response(&mut callback_stream, "400 Bad Request", &html).await;
+        return Err(SyncError::InvalidInput(msg));
     }
 
-    let token_data: GoogleTokenResponse = token_resp
-        .json()
-        .await
-        .map_err(|e| SyncError::InvalidInput(format!("Invalid Google token response: {e}")))?;
+    let token_data: GoogleTokenResponse = match token_resp.json().await {
+        Ok(data) => data,
+        Err(e) => {
+            let msg = format!("Invalid Google token response: {e}");
+            let html = format!(
+                "<html><body style=\"font-family:Georgia,serif;background:#FBF7F0;color:#26201D;padding:2.5rem;max-width:540px;margin:auto;\"><h2 style=\"color:#B5563E;\">Google Drive sign-in did not complete</h2><p>{}</p><p>You may close this tab and return to Log.</p></body></html>",
+                escape_html_text(&msg)
+            );
+            write_http_response(&mut callback_stream, "502 Bad Gateway", &html).await;
+            return Err(SyncError::InvalidInput(msg));
+        }
+    };
 
     let mut auth = load_stored_gdrive_auth();
     let email = fetch_google_account_email(client, &token_data.access_token).await;
@@ -838,9 +913,26 @@ pub async fn connect_gdrive_oauth(req: &ConnectGdriveOauthRequest) -> Result<Gdr
         .expires_in
         .map(|secs| Utc::now() + ChronoDuration::seconds(secs));
     if email.is_some() {
-        auth.account_email = email;
+        auth.account_email = email.clone();
     }
-    save_stored_gdrive_auth(&auth)?;
+    if let Err(err) = save_stored_gdrive_auth(&auth) {
+        let msg = format!("Failed to save Google Drive credentials locally: {err}");
+        let html = format!(
+            "<html><body style=\"font-family:Georgia,serif;background:#FBF7F0;color:#26201D;padding:2.5rem;max-width:540px;margin:auto;\"><h2 style=\"color:#B5563E;\">Could not save Google Drive credentials</h2><p>{}</p></body></html>",
+            escape_html_text(&msg)
+        );
+        write_http_response(&mut callback_stream, "500 Internal Server Error", &html).await;
+        return Err(err);
+    }
+
+    let account_line = email
+        .as_deref()
+        .map(|e| format!(" as <strong>{}</strong>", escape_html_text(e)))
+        .unwrap_or_default();
+    let success_html = format!(
+        "<html><body style=\"font-family:Georgia,serif;background:#FBF7F0;color:#26201D;padding:2.5rem;max-width:520px;margin:auto;\"><h2>Log is connected to Google Drive</h2><p>Encrypted vault backups are now authorized{account_line}. You may close this browser tab and return to Log.</p></body></html>"
+    );
+    write_http_response(&mut callback_stream, "200 OK", &success_html).await;
 
     Ok(get_gdrive_status(&load_backup_config()).await)
 }
@@ -1795,4 +1887,33 @@ fn parse_cli_first_id(bytes: &[u8]) -> Option<String> {
             .map(str::to_string);
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oauth_error_formatter_explains_missing_client_secret() {
+        let msg = format_oauth_token_exchange_error(
+            reqwest::StatusCode::BAD_REQUEST,
+            r#"{"error":"invalid_request","error_description":"client_secret is missing."}"#,
+        );
+        assert!(msg.contains("Client Secret"));
+        assert!(msg.contains("Google Cloud Console"));
+
+        let invalid = format_oauth_token_exchange_error(
+            reqwest::StatusCode::UNAUTHORIZED,
+            r#"{"error":"invalid_client","error_description":"Unauthorized"}"#,
+        );
+        assert!(invalid.contains("invalid_client"));
+    }
+
+    #[test]
+    fn html_escape_sanitizes_special_characters() {
+        assert_eq!(
+            escape_html_text(r#"<script>alert("x" & 'y')</script>"#),
+            "&lt;script&gt;alert(&quot;x&quot; &amp; &#39;y&#39;)&lt;/script&gt;"
+        );
+    }
 }

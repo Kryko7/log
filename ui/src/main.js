@@ -1107,8 +1107,16 @@ function renderModal() {
       renderModal();
       try {
         await action();
+        if (state.gdriveStatus?.connected) {
+          if (modalRoot) modalRoot.__backupConfigOpen = false;
+          showToast(
+            state.gdriveStatus.detail || "Connected to Google Drive",
+            "success"
+          );
+        }
       } catch (err) {
         state.backupError = err?.message || fallbackErr;
+        showToast(state.backupError, "error");
       } finally {
         state.gdriveConnecting = false;
         if (state.activeModal === "backup") renderModal();
