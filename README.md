@@ -108,5 +108,11 @@ Global flag: `--vault <PATH>` (overrides `LOG_VAULT_DIR`; defaults to `~/Persona
 
 ```bash
 cargo test --workspace
+cargo test --manifest-path src-tauri/Cargo.toml
 node scripts/check-ui.mjs
+node scripts/test-ui.mjs
 ```
+
+## License
+
+MIT License — see [LICENSE](LICENSE) for details.

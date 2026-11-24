@@ -3,6 +3,7 @@ name = "log-desktop"
 version = "0.1.0"
 description = "Pure Tauri v2 desktop application for Log personal journal"
 authors = ["Log Authors"]
+license = "MIT"
 edition = "2021"
 
 [[bin]]

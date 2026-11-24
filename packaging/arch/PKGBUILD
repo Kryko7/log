@@ -58,4 +58,5 @@ StartupNotify=true
 StartupWMClass=dev.logjournal.app
 EOF
   chmod 0644 "$pkgdir/usr/share/applications/dev.logjournal.app.desktop"
+  install -Dm644 "$root_dir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
