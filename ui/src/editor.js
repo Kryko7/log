@@ -2,6 +2,7 @@ import { api, resolveVaultUrl } from "./ipc.js";
 import { icon, weatherIcon } from "./icons.js";
 import { renderMarkdownReadView, extractWikilinks } from "./markdown.js";
 import { createVoiceRecorder, createWaveformPlayer } from "./audio.js";
+import { parseCoverAsset, mountCoverCinemagraph } from "./cover-fx.js";
 import {
   isAutoDerivedTitle,
   createPolaroidElement,
@@ -486,17 +487,19 @@ export function renderEntryEditor(container, state, callbacks = {}) {
   // Optional cover banner container (populated only if user selects one)
   const coverContainer = document.createElement("div");
   sheet.appendChild(coverContainer);
+  let activeCoverFx = null;
 
   const renderCoverBanner = () => {
+    activeCoverFx?.destroy();
+    activeCoverFx = null;
     coverContainer.innerHTML = "";
     if (!draft.cover_asset) return;
     const matchedCover = (state.manifest?.covers || []).find(
       (c) => c.path === draft.cover_asset
     );
+    const { basePath, fx } = parseCoverAsset(draft.cover_asset);
     const isAnimated = Boolean(
-      (Array.isArray(matchedCover?.tags) &&
-        matchedCover.tags.includes("animated")) ||
-        String(draft.cover_asset).includes("/anim-")
+      fx || (Array.isArray(matchedCover?.tags) && matchedCover.tags.includes("animated"))
     );
     const banner = document.createElement("div");
     banner.className = `entry-cover-banner${
@@ -504,7 +507,7 @@ export function renderEntryEditor(container, state, callbacks = {}) {
     }`;
     const img = document.createElement("img");
     img.className = "entry-cover-img";
-    img.src = resolveVaultUrl(draft.cover_asset);
+    img.src = resolveVaultUrl(basePath || draft.cover_asset);
     img.alt = matchedCover?.label || "Entry cover";
 
     const removeBtn = document.createElement("button");
@@ -518,7 +521,11 @@ export function renderEntryEditor(container, state, callbacks = {}) {
       markDirtyAndScheduleSave();
     });
 
-    banner.append(img, removeBtn);
+    banner.appendChild(img);
+    if (fx) {
+      activeCoverFx = mountCoverCinemagraph(banner, fx, img);
+    }
+    banner.appendChild(removeBtn);
     coverContainer.appendChild(banner);
   };
 
@@ -1434,7 +1441,7 @@ export function renderEntryEditor(container, state, callbacks = {}) {
           }${isAnimSection ? " is-animated" : ""}`;
           cBtn.title = cov.label || "Cover wash";
           const img = document.createElement("img");
-          img.src = resolveVaultUrl(cov.path);
+          img.src = resolveVaultUrl(parseCoverAsset(cov.path).basePath || cov.path);
           img.alt = cov.label || "Cover wash";
           cBtn.appendChild(img);
           if (isAnimSection) {
@@ -3577,6 +3584,8 @@ export function renderEntryEditor(container, state, callbacks = {}) {
         weatherPopoverAbort = null;
       }
       lifecycleAbort.abort();
+      activeCoverFx?.destroy();
+      activeCoverFx = null;
       if (stampLayer._stampOverlayAbort) {
         stampLayer._stampOverlayAbort.abort();
         stampLayer._stampOverlayAbort = null;

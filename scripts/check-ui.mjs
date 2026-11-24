@@ -166,7 +166,9 @@ if (!fs.existsSync(manifestPath)) {
   for (const group of ["covers", "stamps", "stickers", "washi"]) {
     const items = Array.isArray(manifest[group]) ? manifest[group] : [];
     for (const item of items) {
-      const rel = String(item.path || "").replace(/^\/+/, "");
+      const rel = String(item.path || "")
+        .replace(/[?#].*$/, "")
+        .replace(/^\/+/, "");
       const fullPath = path.join(uiDir, rel);
       if (!rel || !fs.existsSync(fullPath)) {
         fail(`Manifest asset missing on disk (${group}/${item.id}): ${item.path}`);

@@ -1,5 +1,6 @@
 import { icon } from "./icons.js";
 import { resolveVaultUrl } from "./ipc.js";
+import { parseCoverAsset } from "./cover-fx.js";
 
 const ACCENT_PALETTE = [
   "#546E5A",
@@ -85,7 +86,7 @@ function buildNotebookForm({
         ? `${cov.label || "Animated cover"} (Animated)`
         : cov.label || "Cover wash";
       const img = document.createElement("img");
-      img.src = resolveVaultUrl(cov.path);
+      img.src = resolveVaultUrl(parseCoverAsset(cov.path).basePath || cov.path);
       img.alt = cov.label || "Cover";
       img.decoding = "async";
       sw.appendChild(img);
@@ -490,7 +491,9 @@ export function renderSidebar(container, state, callbacks = {}) {
       thumb.className = "notebook-cover-thumb";
       thumb.style.borderColor = nb.accent_color || "var(--border-strong)";
       const thumbImg = document.createElement("img");
-      thumbImg.src = resolveVaultUrl(nb.cover_asset);
+      thumbImg.src = resolveVaultUrl(
+        parseCoverAsset(nb.cover_asset).basePath || nb.cover_asset
+      );
       thumbImg.alt = "";
       thumbImg.loading = "lazy";
       thumbImg.decoding = "async";

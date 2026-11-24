@@ -382,6 +382,9 @@ const {
 } = await import(uiSrcUrl("views.js"));
 const { renderEntryEditor } = await import(uiSrcUrl("editor.js"));
 const { renderSidebar } = await import(uiSrcUrl("sidebar.js"));
+const { parseCoverAsset, mountCoverCinemagraph } = await import(
+  uiSrcUrl("cover-fx.js")
+);
 
 const manifest = JSON.parse(
   fs.readFileSync(path.join(uiDir, "assets", "manifest.json"), "utf8")
@@ -1204,6 +1207,7 @@ await test("animated covers, Page Appearance popover, Zen Focus toggle, reading 
 
   root.querySelector(".cover-mini-btn.is-animated").click();
   assert.ok(root.querySelector(".entry-cover-banner.is-animated-cover"));
+  assert.ok(root.querySelector(".entry-cover-fx-canvas"));
 
   root
     .querySelectorAll(".insert-action-btn")
@@ -1322,8 +1326,8 @@ await test("sidebar, Insights modal, Shortcuts modal, and Migration modal render
   modal.remove();
 });
 
-// 11. Manifest asset integrity, reduced-motion coverage & CSS layout stability invariants
-await test("manifest assets, reduced-motion SVG guards, and CSS topbar/dark-mode invariants hold", () => {
+// 11. Manifest asset integrity, cinemagraph cover FX parsing & CSS layout stability invariants
+await test("manifest assets, cinemagraph cover-fx presets, legacy anim mapping, and CSS topbar/dark-mode invariants hold", () => {
   assert.equal(manifest.covers.length, 14);
   assert.equal(manifest.stamps.length, 7);
   assert.equal(manifest.stickers.length, 7);
@@ -1333,16 +1337,29 @@ await test("manifest assets, reduced-motion SVG guards, and CSS topbar/dark-mode
     (c) => Array.isArray(c.tags) && c.tags.includes("animated")
   );
   assert.equal(animCovers.length, 6);
+  const fxSeen = new Set();
   for (const cov of animCovers) {
-    const svg = fs.readFileSync(
-      path.join(uiDir, cov.path.replace(/^\/+/, "")),
-      "utf8"
-    );
+    const parsed = parseCoverAsset(cov.path);
+    assert.ok(parsed.fx, `${cov.id} must resolve a valid cinemagraph fx key`);
+    fxSeen.add(parsed.fx);
     assert.ok(
-      svg.includes("prefers-reduced-motion: reduce"),
-      `${cov.id} must guard animations with prefers-reduced-motion`
+      fs.existsSync(path.join(uiDir, parsed.basePath.replace(/^\/+/, ""))),
+      `backdrop image for ${cov.id} must exist on disk`
     );
   }
+  assert.equal(fxSeen.size, 6, "all 6 animated covers must use distinct fx scenes");
+
+  // Legacy SVG animated cover paths transparently upgrade to painted backdrop + live FX
+  const legacy = parseCoverAsset("/assets/covers/anim-rainy-window.svg");
+  assert.equal(legacy.fx, "rain");
+  assert.equal(legacy.basePath, "/assets/covers/rainy-tea-desk.png");
+
+  // mountCoverCinemagraph cleanly creates & destroys its canvas
+  const host = document.createElement("div");
+  const handleFx = mountCoverCinemagraph(host, "fireflies");
+  assert.ok(host.querySelector(".entry-cover-fx-canvas"));
+  handleFx.destroy();
+  assert.equal(host.querySelector(".entry-cover-fx-canvas"), null);
 
   const cssSrc = fs.readFileSync(path.join(uiDir, "styles", "main.css"), "utf8");
   const opens = (cssSrc.match(/\{/g) || []).length;

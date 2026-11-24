@@ -996,32 +996,32 @@ body.night .sidebar-new-btn {
 }
 
 .entry-page-sheet.page-turn-next {
-  animation: pageTurnNext 0.38s var(--ease-folio);
+  animation: pageTurnNext 0.34s var(--ease-folio);
 }
 
 .entry-page-sheet.page-turn-prev {
-  animation: pageTurnPrev 0.38s var(--ease-folio);
+  animation: pageTurnPrev 0.34s var(--ease-folio);
 }
 
 @keyframes pageTurnNext {
   0% {
-    opacity: 0.65;
-    transform: translateX(14px);
+    opacity: 0.4;
+    transform: translate3d(18px, 0, 0) scale(0.994);
   }
   100% {
     opacity: 1;
-    transform: translateX(0);
+    transform: translate3d(0, 0, 0) scale(1);
   }
 }
 
 @keyframes pageTurnPrev {
   0% {
-    opacity: 0.65;
-    transform: translateX(-14px);
+    opacity: 0.4;
+    transform: translate3d(-18px, 0, 0) scale(0.994);
   }
   100% {
     opacity: 1;
-    transform: translateX(0);
+    transform: translate3d(0, 0, 0) scale(1);
   }
 }
 
@@ -1047,6 +1047,7 @@ body.night .sidebar-new-btn {
   position: absolute;
   top: 0.7rem;
   right: 0.7rem;
+  z-index: 3;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1735,13 +1736,106 @@ body.focus-zen .entry-page-sheet {
   box-shadow: 0 28px 68px -22px rgba(24, 18, 14, 0.24);
 }
 
-/* Animated Cover Ambient Sheen */
-.entry-cover-banner.is-animated-cover .entry-cover-img {
-  transition: transform 0.9s var(--ease-folio);
+/* Animated Cover Cinemagraph Canvas & Smooth 2.5D Ken Burns Parallax */
+.entry-cover-fx-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 1;
+  display: block;
 }
 
-.entry-cover-banner.is-animated-cover:hover .entry-cover-img {
-  transform: scale(1.018);
+.entry-cover-banner.is-animated-cover .entry-cover-img,
+.notebook-cover-frame.is-animated-cover img {
+  transform: translate3d(var(--cover-px, 0px), var(--cover-py, 0px), 0) scale(1.045);
+  transition: transform 0.25s ease-out;
+  will-change: transform;
+  animation: coverBreathe 24s ease-in-out infinite;
+}
+
+.notebook-cover-frame.is-animated-cover {
+  position: relative;
+  overflow: hidden;
+}
+
+@keyframes coverBreathe {
+  0%,
+  100% {
+    filter: brightness(1) saturate(1);
+  }
+  50% {
+    filter: brightness(1.035) saturate(1.05);
+  }
+}
+
+.cover-live-dot {
+  animation: liveDotPulse 2.8s ease-in-out infinite;
+}
+
+@keyframes liveDotPulse {
+  0%,
+  100% {
+    opacity: 0.65;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.12);
+  }
+}
+
+/* Tactile Editorial Popover & Modal Reveals */
+.cover-swatch-popover,
+.entry-more-menu,
+.stamp-picker-popover,
+.entry-date-popover,
+.entry-weather-popover,
+.slash-palette-popover,
+.inline-picker-card {
+  animation: popoverReveal 0.17s var(--ease-folio) both;
+}
+
+.editorial-modal-backdrop,
+.search-modal-backdrop {
+  animation: backdropFade 0.16s ease both;
+}
+
+.editorial-modal-sheet,
+.search-modal-sheet {
+  animation: modalReveal 0.22s var(--ease-folio) both;
+}
+
+@keyframes popoverReveal {
+  from {
+    opacity: 0;
+    transform: translate3d(0, -4px, 0) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes backdropFade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes modalReveal {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0) scale(0.982);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
 }
 
 /* Tactile Rubber-Stamp Ink Press Spring */
@@ -4722,6 +4816,7 @@ body.night .filter-pill-btn.is-active {
   .entry-insert-bar,
   .entry-blank-prompt,
   .entry-cover-remove,
+  .entry-cover-fx-canvas,
   .polaroid-remove-btn,
   .stamp-quick-remove,
   .stamp-mini-controls,

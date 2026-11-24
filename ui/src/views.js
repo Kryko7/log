@@ -3,6 +3,7 @@
 
 import { icon, weatherIcon } from "./icons.js";
 import { resolveVaultUrl } from "./ipc.js";
+import { parseCoverAsset, mountCoverCinemagraph } from "./cover-fx.js";
 
 function escapeHtml(str) {
   return String(str ?? "")
@@ -425,21 +426,34 @@ export function renderTimelineView(container, state, callbacks = {}) {
       card.appendChild(nameInput);
 
       const coverRow = el("div", "cover-swatch-row notebook-banner-swatches");
-      const builtInCovers = (state.manifest?.covers || []).slice(0, 4);
+      const builtInCovers = state.manifest?.covers || [];
       const renderSwatches = () => {
         coverRow.innerHTML = "";
         for (const cov of builtInCovers) {
+          const { basePath, fx } = parseCoverAsset(cov.path);
+          const isAnim = Boolean(
+            fx || (Array.isArray(cov.tags) && cov.tags.includes("animated"))
+          );
           const sw = el(
             "button",
-            `cover-swatch-btn${draftCover === cov.path ? " selected" : ""}`
+            `cover-swatch-btn${draftCover === cov.path ? " selected" : ""}${
+              isAnim ? " is-animated" : ""
+            }`
           );
           sw.type = "button";
-          sw.title = cov.label || "Cover wash";
+          sw.title = isAnim
+            ? `${cov.label || "Living cover"} (Animated)`
+            : cov.label || "Cover wash";
           const img = document.createElement("img");
-          img.src = resolveVaultUrl(cov.path);
+          img.src = resolveVaultUrl(basePath || cov.path);
           img.alt = cov.label || "Cover";
           img.decoding = "async";
           sw.appendChild(img);
+          if (isAnim) {
+            const dot = el("span", "cover-live-dot");
+            dot.setAttribute("aria-hidden", "true");
+            sw.appendChild(dot);
+          }
           sw.addEventListener("click", () => {
             draftCover = cov.path;
             renderSwatches();
@@ -648,17 +662,24 @@ export function renderTimelineView(container, state, callbacks = {}) {
   if (selectedNb) {
     const banner = el("div", "notebook-stage-banner");
     if (selectedNb.cover_asset) {
-      const frame = el("button", "notebook-cover-frame");
+      const { basePath, fx } = parseCoverAsset(selectedNb.cover_asset);
+      const frame = el(
+        "button",
+        `notebook-cover-frame${fx ? " is-animated-cover" : ""}`
+      );
       frame.type = "button";
       frame.style.borderColor = selectedNb.accent_color || "var(--border-strong)";
       frame.title = callbacks.onUpdateNotebook
         ? "Change notebook cover"
         : selectedNb.name;
       const covImg = document.createElement("img");
-      covImg.src = resolveVaultUrl(selectedNb.cover_asset);
+      covImg.src = resolveVaultUrl(basePath || selectedNb.cover_asset);
       covImg.alt = `${selectedNb.name} cover`;
       covImg.decoding = "async";
       frame.appendChild(covImg);
+      if (fx) {
+        mountCoverCinemagraph(frame, fx, covImg);
+      }
       if (callbacks.onUpdateNotebook) {
         frame.addEventListener("click", () => {
           panelMode = panelMode === "edit" ? null : "edit";

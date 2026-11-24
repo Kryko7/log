@@ -68,49 +68,49 @@
       "id": "anim-rainy-window",
       "label": "Rain on Garden Glass",
       "category": "covers",
-      "path": "/assets/covers/anim-rainy-window.svg",
-      "description": "Gently falling watercolor rain and glistening window droplets over a misty sage garden.",
-      "tags": ["animated", "rain", "cozy", "sage", "window"]
+      "path": "/assets/covers/rainy-tea-desk.png#fx=rain",
+      "description": "Living cinemagraph of diagonal rain streaks and refractive droplets sliding down a garden window.",
+      "tags": ["animated", "rain", "cozy", "tea", "window"]
     },
     {
       "id": "anim-firefly-meadow",
       "label": "Candlelit Firefly Garden",
       "category": "covers",
-      "path": "/assets/covers/anim-firefly-meadow.svg",
-      "description": "Drifting warm amber fireflies, crescent moon, and swaying ferns on a dark nocturnal canvas.",
+      "path": "/assets/covers/midnight-ink-garden.png#fx=fireflies",
+      "description": "Living nocturnal cinemagraph with warm amber fireflies drifting through a botanical ink garden.",
       "tags": ["animated", "night", "fireflies", "botanical", "dark-mode"]
     },
     {
-      "id": "anim-autumn-drift",
-      "label": "Drifting Autumn Leaves",
+      "id": "anim-winter-snowfall",
+      "label": "Winter Snowfall & Lantern",
       "category": "covers",
-      "path": "/assets/covers/anim-autumn-drift.svg",
-      "description": "Terracotta maple and golden ginkgo leaves gliding slowly across warm cream handmade paper.",
+      "path": "/assets/covers/winter-pine-lantern.png#fx=snow",
+      "description": "Soft multi-depth snowfall illuminated by a gently flickering warm amber brass lantern.",
+      "tags": ["animated", "winter", "snow", "night", "lantern", "dark-mode"]
+    },
+    {
+      "id": "anim-autumn-drift",
+      "label": "Autumn Maple Breeze",
+      "category": "covers",
+      "path": "/assets/covers/autumn-maple-letter.png#fx=autumn",
+      "description": "Painted Japanese maple and ginkgo leaves tumbling gently across warm cream handmade rag paper.",
       "tags": ["animated", "autumn", "leaves", "cream", "botanical"]
     },
     {
-      "id": "anim-ink-bloom",
-      "label": "Botanical Ink & Tea Wash",
+      "id": "anim-morning-steam",
+      "label": "Golden Hour Sunbeams & Steam",
       "category": "covers",
-      "path": "/assets/covers/anim-ink-bloom.svg",
-      "description": "Living sage, ochre, and terracotta watercolor clouds breathing behind fine walnut-ink flora.",
-      "tags": ["animated", "watercolor", "ink", "minimal", "calm"]
+      "path": "/assets/covers/golden-hour-window.png#fx=sunbeams",
+      "description": "Volumetric afternoon sunbeams, floating dust motes, and gently curling teacup steam.",
+      "tags": ["animated", "morning", "tea", "sunbeams", "cozy"]
     },
     {
       "id": "anim-coastal-tide",
-      "label": "Evening Coastal Tide",
+      "label": "Coastal Mist & Lighthouse",
       "category": "covers",
-      "path": "/assets/covers/anim-coastal-tide.svg",
-      "description": "Soft rhythmic ocean tide ripples, swaying sea oats, and a softly pulsing headland lighthouse.",
+      "path": "/assets/covers/coastal-lighthouse-sketch.png#fx=coastal",
+      "description": "Drifting sea mist, shimmering bay water glints, gliding gulls, and a sweeping headland lighthouse beam.",
       "tags": ["animated", "coast", "lighthouse", "travel", "calm"]
-    },
-    {
-      "id": "anim-morning-steam",
-      "label": "Morning Tea & Sunbeams",
-      "category": "covers",
-      "path": "/assets/covers/anim-morning-steam.svg",
-      "description": "Warm slanting morning light with drifting dust motes and curling steam from a terracotta teacup.",
-      "tags": ["animated", "morning", "tea", "sunbeams", "cozy"]
     }
   ],
   "stamps": [
