@@ -4,6 +4,7 @@
    ========================================================================== */
 
 :root {
+  color-scheme: light;
   /* Day Cream Paper Palette */
   --paper-cream: #FBF7F0;
   --paper-margin: #F4EFE6;
@@ -45,6 +46,7 @@
 
 html[data-theme="night"],
 body.night {
+  color-scheme: dark;
   --bg-desk: #141212;
   --bg-page: #1B1918;
   --bg-margin: #161414;
@@ -61,6 +63,11 @@ body.night {
   --card-shadow: 0 4px 12px rgba(0, 0, 0, 0.32), 0 16px 36px -14px rgba(0, 0, 0, 0.52);
   --scrim-soft: rgba(22, 20, 20, 0.84);
   --modal-backdrop: rgba(8, 7, 7, 0.70);
+}
+
+option {
+  background-color: var(--bg-page);
+  color: var(--fg-ink);
 }
 
 *,
@@ -1066,32 +1073,43 @@ body.night .sidebar-new-btn {
   position: relative;
   z-index: 14;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
+  gap: 0.5rem;
+  min-height: 36px;
   padding-bottom: 0.9rem;
   margin-bottom: 2rem;
   border-bottom: 1px solid var(--border-subtle);
 }
 
-.entry-topbar-left,
+.entry-topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
 .entry-topbar-right {
   display: flex;
   align-items: center;
-  gap: 0.45rem;
+  gap: 0.24rem;
+  flex-shrink: 0;
 }
 
 .topbar-ghost-btn {
   display: inline-flex;
   align-items: center;
-  gap: 0.25rem;
-  padding: 0.28rem 0.5rem;
+  gap: 0.22rem;
+  padding: 0.26rem 0.42rem;
   border-radius: 4px;
   border: none;
   background: transparent;
   color: var(--fg-muted);
   font-size: 12.5px;
+  white-space: nowrap;
+  flex-shrink: 0;
   cursor: pointer;
 }
 
@@ -1109,6 +1127,11 @@ body.night .sidebar-new-btn {
   border-radius: 4px;
   cursor: pointer;
   outline: none;
+  max-width: 152px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .topbar-notebook-select:hover {
@@ -1117,17 +1140,45 @@ body.night .sidebar-new-btn {
 }
 
 .entry-save-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.34rem;
+  width: 66px;
+  min-width: 66px;
+  flex-shrink: 0;
   font-size: 12px;
   color: var(--fg-muted);
-  padding-right: 0.35rem;
+  padding-right: 0.25rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+.entry-save-indicator::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--accent-primary);
+  opacity: 0.55;
+  flex-shrink: 0;
+  transition: background-color 0.16s ease, opacity 0.16s ease;
 }
 
 .entry-save-indicator.is-dirty {
   color: var(--accent-stamp);
 }
 
+.entry-save-indicator.is-dirty::before {
+  background: var(--accent-stamp);
+  opacity: 0.95;
+}
+
 .entry-mode-switch {
   display: inline-flex;
+  flex-shrink: 0;
   padding: 2px;
   border-radius: 5px;
   border: 1px solid var(--border-subtle);
@@ -1135,13 +1186,14 @@ body.night .sidebar-new-btn {
 }
 
 .mode-switch-btn {
-  padding: 0.22rem 0.65rem;
+  padding: 0.22rem 0.58rem;
   border: none;
   border-radius: 4px;
   background: transparent;
   color: var(--fg-muted);
   font-size: 12px;
   font-weight: 500;
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -1156,6 +1208,7 @@ body.night .sidebar-new-btn {
   justify-content: center;
   width: 28px;
   height: 28px;
+  flex-shrink: 0;
   border-radius: 4px;
   border: none;
   background: transparent;
@@ -1173,17 +1226,23 @@ body.night .sidebar-new-btn {
   color: var(--accent-stamp);
 }
 
+.topbar-delete-btn:hover {
+  color: var(--accent-stamp);
+}
+
 .topbar-divider {
   width: 1px;
   height: 16px;
   background: var(--border-subtle);
-  margin: 0 0.2rem;
+  margin: 0 0.15rem;
+  flex-shrink: 0;
 }
 
 .topbar-delete-confirm {
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
+  gap: 0.24rem;
+  flex-shrink: 0;
 }
 
 .topbar-danger-btn {
@@ -1191,9 +1250,10 @@ body.night .sidebar-new-btn {
   background: rgba(181, 86, 62, 0.1);
   color: var(--accent-stamp);
   border-radius: 4px;
-  padding: 0.22rem 0.5rem;
+  padding: 0.22rem 0.48rem;
   font-size: 11.5px;
   font-weight: 500;
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -1319,10 +1379,13 @@ body.night .sidebar-new-btn {
   justify-content: space-between;
   gap: 0.75rem;
   margin-bottom: 0.65rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .entry-otd-btn,
 .entry-dateline-otd {
+  flex-shrink: 0;
+  white-space: nowrap;
   border: none;
   background: transparent;
   padding: 0;
@@ -1585,18 +1648,19 @@ html[data-theme="night"][data-paper-ruling="dots"] .entry-prose-region {
 }
 
 html[data-paper-ruling="margin"] .entry-page-sheet {
+  --margin-line-x: calc(clamp(1.75rem, 5vw, 4rem) - 0.85rem);
   background-image:
     linear-gradient(
       to right,
       transparent 0,
-      transparent 3.1rem,
-      rgba(181, 86, 62, 0.22) 3.1rem,
-      rgba(181, 86, 62, 0.22) calc(3.1rem + 1px),
-      transparent calc(3.1rem + 1px),
-      transparent calc(3.1rem + 4px),
-      rgba(181, 86, 62, 0.12) calc(3.1rem + 4px),
-      rgba(181, 86, 62, 0.12) calc(3.1rem + 5px),
-      transparent calc(3.1rem + 5px)
+      transparent var(--margin-line-x),
+      rgba(181, 86, 62, 0.22) var(--margin-line-x),
+      rgba(181, 86, 62, 0.22) calc(var(--margin-line-x) + 1px),
+      transparent calc(var(--margin-line-x) + 1px),
+      transparent calc(var(--margin-line-x) + 4px),
+      rgba(181, 86, 62, 0.12) calc(var(--margin-line-x) + 4px),
+      rgba(181, 86, 62, 0.12) calc(var(--margin-line-x) + 5px),
+      transparent calc(var(--margin-line-x) + 5px)
     );
 }
 
@@ -1628,6 +1692,7 @@ html[data-theme="night"][data-paper-ruling="margin"] .entry-prose-region {
   left: 0;
   right: 0;
   height: 2px;
+  margin-bottom: -2px;
   z-index: 16;
   pointer-events: none;
   opacity: 0;
@@ -3969,7 +4034,10 @@ body.night .placed-stamp-node.is-postmark .placed-stamp-img {
   display: inline-flex;
   align-items: center;
   gap: 0.42rem;
-  padding: 0.14rem 0.36rem 0.14rem 0;
+  min-width: 0;
+  text-align: left;
+  padding: 0.14rem 0.36rem;
+  margin-left: -0.36rem;
   border: none;
   border-radius: 4px;
   background: transparent;
@@ -3981,7 +4049,6 @@ body.night .placed-stamp-node.is-postmark .placed-stamp-img {
 .entry-dateline-btn:hover {
   color: var(--fg-ink);
   background: var(--bg-elevated);
-  padding-left: 0.36rem;
 }
 
 .dateline-edit-icon {
@@ -4579,6 +4646,18 @@ body.night .filter-pill-btn.is-active {
 /* ==========================================================================
    Responsive Layout, Reduced Motion & Print Stylesheet
    ========================================================================== */
+
+@media (max-width: 1180px) {
+  .sanctuary-shell.is-sidebar-collapsed .sanctuary-main {
+    padding-top: 3.35rem;
+  }
+}
+
+@media (max-width: 580px) {
+  .entry-topbar {
+    flex-wrap: wrap;
+  }
+}
 
 @media (max-width: 860px) {
   .sanctuary-shell {

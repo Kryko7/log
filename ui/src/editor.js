@@ -569,11 +569,15 @@ export function renderEntryEditor(container, state, callbacks = {}) {
   const updateSaveIndicator = () => {
     if (!saveIndicatorEl) return;
     saveIndicatorEl.classList.toggle("is-dirty", dirty || saving);
+    saveIndicatorEl.title = "";
     if (saving) {
+      saveIndicatorEl.dataset.status = "saving";
       saveIndicatorEl.textContent = "Saving…";
     } else if (dirty) {
+      saveIndicatorEl.dataset.status = "unsaved";
       saveIndicatorEl.textContent = "Unsaved";
     } else {
+      saveIndicatorEl.dataset.status = "saved";
       saveIndicatorEl.textContent = "Saved";
     }
   };
@@ -687,8 +691,11 @@ export function renderEntryEditor(container, state, callbacks = {}) {
           saving = false;
           if (saveIndicatorEl) {
             saveIndicatorEl.classList.add("is-dirty");
-            saveIndicatorEl.textContent = err?.message || "Save failed";
+            saveIndicatorEl.dataset.status = "error";
+            saveIndicatorEl.textContent = "Error";
+            saveIndicatorEl.title = err?.message || "Save failed";
           }
+          callbacks.onToast?.(err?.message || "Save failed", "error");
           throw err;
         }
         saving = false;
@@ -787,7 +794,9 @@ export function renderEntryEditor(container, state, callbacks = {}) {
         callbacks.onToast?.(err?.message || "Photo upload failed", "error");
         if (saveIndicatorEl) {
           saveIndicatorEl.classList.add("is-dirty");
-          saveIndicatorEl.textContent = err?.message || "Photo upload failed";
+          saveIndicatorEl.dataset.status = "error";
+          saveIndicatorEl.textContent = "Error";
+          saveIndicatorEl.title = err?.message || "Photo upload failed";
         }
       }
     }
@@ -1268,13 +1277,10 @@ export function renderEntryEditor(container, state, callbacks = {}) {
       if (!deleteConfirmOpen) {
         const delBtn = document.createElement("button");
         delBtn.type = "button";
-        delBtn.className = "topbar-ghost-btn topbar-delete-btn";
+        delBtn.className = "topbar-icon-btn topbar-delete-btn";
         delBtn.title = "Delete entry";
         delBtn.setAttribute("aria-label", "Delete entry");
         delBtn.appendChild(iconNode("trash", "tiny-icon"));
-        const delLabel = document.createElement("span");
-        delLabel.textContent = "Delete";
-        delBtn.appendChild(delLabel);
         delBtn.addEventListener("click", () => {
           deleteConfirmOpen = true;
           renderTopbar();
@@ -1286,7 +1292,8 @@ export function renderEntryEditor(container, state, callbacks = {}) {
         const confirmBtn = document.createElement("button");
         confirmBtn.type = "button";
         confirmBtn.className = "topbar-danger-btn";
-        confirmBtn.textContent = "Confirm Delete";
+        confirmBtn.textContent = "Confirm";
+        confirmBtn.title = "Permanently delete this entry";
         confirmBtn.addEventListener("click", async () => {
           if (saveTimer) {
             clearTimeout(saveTimer);
@@ -1296,7 +1303,7 @@ export function renderEntryEditor(container, state, callbacks = {}) {
           editVersion = savedVersion;
           disposed = true;
           confirmBtn.disabled = true;
-          confirmBtn.textContent = "Deleting...";
+          confirmBtn.textContent = "Deleting…";
           if (inFlightSave) {
             await inFlightSave.catch(() => {});
           }
@@ -1309,7 +1316,9 @@ export function renderEntryEditor(container, state, callbacks = {}) {
             callbacks.onToast?.(err?.message || "Delete failed", "error");
             if (saveIndicatorEl) {
               saveIndicatorEl.classList.add("is-dirty");
-              saveIndicatorEl.textContent = err?.message || "Delete failed";
+              saveIndicatorEl.dataset.status = "error";
+              saveIndicatorEl.textContent = "Error";
+              saveIndicatorEl.title = err?.message || "Delete failed";
             }
           }
         });
