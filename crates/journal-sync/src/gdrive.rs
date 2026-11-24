@@ -31,7 +31,7 @@ const GDRIVE_UPLOAD_API: &str = "https://www.googleapis.com/upload/drive/v3/file
 const GDRIVE_ABOUT_API: &str = "https://www.googleapis.com/drive/v3/about";
 const GOOGLE_AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-const GOOGLE_OAUTH_SCOPE: &str = "https://www.googleapis.com/auth/drive.file email";
+const GOOGLE_OAUTH_SCOPE: &str = "https://www.googleapis.com/auth/drive.file";
 
 const MULTIPART_UPLOAD_THRESHOLD_BYTES: u64 = 8 * 1024 * 1024;
 const RESUMABLE_CHUNK_BYTES: usize = 4 * 1024 * 1024;
@@ -73,6 +73,17 @@ struct GoogleTokenResponse {
     refresh_token: Option<String>,
     #[serde(default)]
     expires_in: Option<i64>,
+    #[serde(default)]
+    scope: Option<String>,
+}
+
+fn has_required_drive_scope(scope_str: &str) -> bool {
+    scope_str.split_whitespace().any(|s| {
+        matches!(
+            s,
+            "https://www.googleapis.com/auth/drive.file" | "https://www.googleapis.com/auth/drive"
+        )
+    })
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -831,7 +842,8 @@ pub async fn connect_gdrive_oauth(req: &ConnectGdriveOauthRequest) -> Result<Gdr
         )));
     }
 
-    let (mut callback_stream, code, _scope) = wait_for_oauth_callback(listener, &state).await?;
+    let (mut callback_stream, code, callback_scope) =
+        wait_for_oauth_callback(listener, &state).await?;
 
     let client = match shared_gdrive_client() {
         Ok(c) => c,
@@ -898,6 +910,24 @@ pub async fn connect_gdrive_oauth(req: &ConnectGdriveOauthRequest) -> Result<Gdr
             return Err(SyncError::InvalidInput(msg));
         }
     };
+
+    let granted_scope = token_data
+        .scope
+        .as_deref()
+        .or(callback_scope.as_deref())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if let Some(scope_str) = granted_scope {
+        if !has_required_drive_scope(scope_str) {
+            let msg = "Google Drive file permission was not granted during sign-in. Sign in again and allow Log to access Google Drive files created by this app.".to_string();
+            let html = format!(
+                "<html><body style=\"font-family:Georgia,serif;background:#FBF7F0;color:#26201D;padding:2.5rem;max-width:540px;margin:auto;\"><h2 style=\"color:#B5563E;\">Google Drive permission missing</h2><p>{}</p><p>You may close this tab and retry from Log.</p></body></html>",
+                escape_html_text(&msg)
+            );
+            write_http_response(&mut callback_stream, "403 Forbidden", &html).await;
+            return Err(SyncError::InvalidInput(msg));
+        }
+    }
 
     let mut auth = load_stored_gdrive_auth();
     let email = fetch_google_account_email(client, &token_data.access_token).await;
@@ -1420,6 +1450,15 @@ fn escape_drive_query(input: &str) -> String {
 }
 
 fn classify_http_error(status: reqwest::StatusCode, context: &str, body: &str) -> RestUploadError {
+    if status == reqwest::StatusCode::FORBIDDEN
+        && (body.contains("ACCESS_TOKEN_SCOPE_INSUFFICIENT")
+            || body.contains("insufficientPermissions")
+            || body.contains("insufficient authentication scopes"))
+    {
+        return RestUploadError::Other(
+            "Google Drive permission was not granted for this sign-in (insufficient scope). Click Disconnect in Backup Settings, sign in again, and allow Google Drive file access.".to_string(),
+        );
+    }
     let msg = format!("{context} HTTP {status}: {body}");
     if status == reqwest::StatusCode::UNAUTHORIZED {
         RestUploadError::Unauthorized(msg)
@@ -1915,5 +1954,27 @@ mod tests {
             escape_html_text(r#"<script>alert("x" & 'y')</script>"#),
             "&lt;script&gt;alert(&quot;x&quot; &amp; &#39;y&#39;)&lt;/script&gt;"
         );
+    }
+
+    #[test]
+    fn drive_scope_check_and_403_scope_classification() {
+        assert!(has_required_drive_scope(
+            "https://www.googleapis.com/auth/drive.file"
+        ));
+        assert!(has_required_drive_scope(
+            "email https://www.googleapis.com/auth/drive"
+        ));
+        assert!(!has_required_drive_scope(
+            "email https://www.googleapis.com/auth/userinfo.email"
+        ));
+
+        let err = classify_http_error(
+            reqwest::StatusCode::FORBIDDEN,
+            "Drive folder search",
+            r#"{"error":{"code":403,"details":[{"reason":"ACCESS_TOKEN_SCOPE_INSUFFICIENT"}]}}"#,
+        );
+        let msg = err.into_message();
+        assert!(msg.contains("Disconnect"));
+        assert!(msg.contains("insufficient scope"));
     }
 }
